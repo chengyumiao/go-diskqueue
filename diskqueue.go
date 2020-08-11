@@ -60,74 +60,76 @@ type diskQueue struct {
 
 	// run-time state (also persisted to disk)
 	// 读写指针位置
-	readPos      int64
-	writePos     int64
+	readPos  int64
+	writePos int64
 	// 读写文件数量
 	readFileNum  int64
 	writeFileNum int64
 
-	depth        int64
+	depth int64
 
 	sync.RWMutex
 
 	// instantiation time metadata
 	// 队列名字
-	name            string
+	name string
 	// 队列路径
-	dataPath        string
+	dataPath string
 	// 每个文件的最大大小
 	maxBytesPerFile int64 // currently this cannot change once created
 	// 最小消息大小
-	minMsgSize      int32
+	minMsgSize int32
 	// 最大消息大小
-	maxMsgSize      int32
+	maxMsgSize int32
 	// 每多少次写同步一次
-	syncEvery       int64         // number of writes per fsync
+	syncEvery int64 // number of writes per fsync
 	// 每次同步的耗时
-	syncTimeout     time.Duration // duration of time per fsync
+	syncTimeout time.Duration // duration of time per fsync
 	// 退出标识位
-	exitFlag        int32
+	exitFlag int32
 	// 是否需要同步
-	needSync        bool
+	needSync bool
 
 	// keeps track of the position where we have read
 	// (but not yet sent over readChan)
 	// 下个读取的位置
-	nextReadPos     int64
+	nextReadPos int64
 	// 下次读取的文件数量
 	nextReadFileNum int64
 	// 读文件标识符
-	readFile  *os.File
+	readFile *os.File
 	// 写文件表示符
 	writeFile *os.File
 	// 读缓冲
-	reader    *bufio.Reader
+	reader *bufio.Reader
 	// 写缓冲
-	writeBuf  bytes.Buffer
+	writeBuf bytes.Buffer
 
 	// exposed via ReadChan()
 	// 通过读chan向外暴露读
 	readChan chan []byte
 
 	// internal channels
-	depthChan         chan int64
+	depthChan chan int64
 	// 写通道
-	writeChan         chan []byte
+	writeChan chan []byte
 	// 写通道回应
 	writeResponseChan chan error
 
 	emptyChan         chan int
 	emptyResponseChan chan error
 	// 退出通道
-	exitChan          chan int
+	exitChan chan int
 	// 退出同步通道
-	exitSyncChan      chan int
+	exitSyncChan chan int
 	// 日志输出函数
 	logf AppLogFunc
 }
 
 // New instantiates an instance of diskQueue, retrieving metadata
 // from the filesystem and starting the read ahead goroutine
+// 创建磁盘队列
+// 参数：队列名，数据路径，每个文件最大字节数，消息消息大小，最大消息大小，每多少个请求同步一次，同步耗时
 func New(name string, dataPath string, maxBytesPerFile int64,
 	minMsgSize int32, maxMsgSize int32,
 	syncEvery int64, syncTimeout time.Duration, logf AppLogFunc) Interface {
@@ -151,11 +153,14 @@ func New(name string, dataPath string, maxBytesPerFile int64,
 	}
 
 	// no need to lock here, nothing else could possibly be touching this instance
+	// 读取元数据
 	err := d.retrieveMetaData()
+	// 如果不为空，或者不存在则报错
 	if err != nil && !os.IsNotExist(err) {
 		d.logf(ERROR, "DISKQUEUE(%s) failed to retrieveMetaData - %s", d.name, err)
 	}
 
+	// 启动循环
 	go d.ioLoop()
 	return &d
 }
@@ -260,6 +265,7 @@ func (d *diskQueue) deleteAllFiles() error {
 	return err
 }
 
+// 跳过所有没有读的文件，并删除这些需要读的文件，直接将readFileNum 到 writeFileNum 对齐到 writeFileNum下一个。
 func (d *diskQueue) skipToNextRWFile() error {
 	var err error
 
@@ -275,6 +281,7 @@ func (d *diskQueue) skipToNextRWFile() error {
 
 	for i := d.readFileNum; i <= d.writeFileNum; i++ {
 		fn := d.fileName(i)
+		// 删除对应的文件
 		innerErr := os.Remove(fn)
 		if innerErr != nil && !os.IsNotExist(innerErr) {
 			d.logf(ERROR, "DISKQUEUE(%s) failed to remove data file - %s", d.name, innerErr)
@@ -464,6 +471,7 @@ func (d *diskQueue) retrieveMetaData() error {
 	var err error
 
 	fileName := d.metaDataFileName()
+	// 打开元文件
 	f, err = os.OpenFile(fileName, os.O_RDONLY, 0600)
 	if err != nil {
 		return err
@@ -471,6 +479,7 @@ func (d *diskQueue) retrieveMetaData() error {
 	defer f.Close()
 
 	var depth int64
+	// 读取元文件中的信息
 	_, err = fmt.Fscanf(f, "%d\n%d,%d\n%d,%d\n",
 		&depth,
 		&d.readFileNum, &d.readPos,
@@ -514,10 +523,14 @@ func (d *diskQueue) persistMetaData() error {
 	return os.Rename(tmpFileName, fileName)
 }
 
+// 获取队列对应元信息文件名（  队列名.diskqueue.meta.dat ）
 func (d *diskQueue) metaDataFileName() string {
 	return fmt.Sprintf(path.Join(d.dataPath, "%s.diskqueue.meta.dat"), d.name)
 }
 
+// 每个队列名字会生成多个不同fileNum的磁盘队列
+// 这个应该是与具体的磁盘文件不能太大有关系
+// 每次队列最终的物理存储的文件名字为：       队列名.diskqueue.$fileNum.dat
 func (d *diskQueue) fileName(fileNum int64) string {
 	return fmt.Sprintf(path.Join(d.dataPath, "%s.diskqueue.%06d.dat"), d.name, fileNum)
 }
@@ -621,6 +634,7 @@ func (d *diskQueue) handleReadError() {
 
 // ioLoop provides the backend for exposing a go channel (via ReadChan())
 // in support of multiple concurrent queue consumers
+// ioLoop：用来向外暴露一个读的通道，可以支持多个并发的队列消费者。
 //
 // it works by looping and branching based on whether or not the queue has data
 // to read and blocking until data is either read or written over the appropriate
