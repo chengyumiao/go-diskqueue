@@ -619,6 +619,7 @@ func (d *diskQueue) moveForward() {
 	d.checkTailCorruption(d.depth)
 }
 
+// 处理错误，将原先的文件名字，改为 名字.bad
 func (d *diskQueue) handleReadError() {
 	// jump to the next read file and rename the current (bad) file
 	if d.readFileNum == d.writeFileNum {
@@ -674,10 +675,12 @@ func (d *diskQueue) ioLoop() {
 
 	for {
 		// dont sync all the time :)
+		// 达到一定次数就开始刷盘
 		if count == d.syncEvery {
 			d.needSync = true
 		}
 
+		// 一旦开始刷盘，那么久开始
 		if d.needSync {
 			err = d.sync()
 			if err != nil {
