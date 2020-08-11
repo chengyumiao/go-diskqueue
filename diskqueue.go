@@ -176,11 +176,13 @@ func (d *diskQueue) Depth() int64 {
 }
 
 // ReadChan returns the receive-only []byte channel for reading data
+// 返回只读型通道
 func (d *diskQueue) ReadChan() <-chan []byte {
 	return d.readChan
 }
 
 // Put writes a []byte to the queue
+// 想写通道中写数据，从写回应通道里面获取返回信号
 func (d *diskQueue) Put(data []byte) error {
 	d.RLock()
 	defer d.RUnlock()
@@ -195,10 +197,12 @@ func (d *diskQueue) Put(data []byte) error {
 
 // Close cleans up the queue and persists metadata
 func (d *diskQueue) Close() error {
+	// 退出
 	err := d.exit(false)
 	if err != nil {
 		return err
 	}
+	// 同步
 	return d.sync()
 }
 
@@ -206,6 +210,7 @@ func (d *diskQueue) Delete() error {
 	return d.exit(true)
 }
 
+// 退出
 func (d *diskQueue) exit(deleted bool) error {
 	d.Lock()
 	defer d.Unlock()
@@ -218,17 +223,21 @@ func (d *diskQueue) exit(deleted bool) error {
 		d.logf(INFO, "DISKQUEUE(%s): closing", d.name)
 	}
 
+	// 关闭退出通道
 	close(d.exitChan)
 	// ensure that ioLoop has exited
+	// 等待同步完成通道
 	<-d.exitSyncChan
-
+	// 关闭深度通道
 	close(d.depthChan)
 
+	// 关闭读文件描述符
 	if d.readFile != nil {
 		d.readFile.Close()
 		d.readFile = nil
 	}
 
+	// 关闭写文件描述符
 	if d.writeFile != nil {
 		d.writeFile.Close()
 		d.writeFile = nil
@@ -446,8 +455,11 @@ func (d *diskQueue) writeOne(data []byte) error {
 }
 
 // sync fsyncs the current writeFile and persists metadata
+// 将当前的文件缓冲区同步，并且关闭写
+// 持久化元信息
 func (d *diskQueue) sync() error {
 	if d.writeFile != nil {
+		// 文件描述符自带的方法
 		err := d.writeFile.Sync()
 		if err != nil {
 			d.writeFile.Close()
@@ -495,6 +507,7 @@ func (d *diskQueue) retrieveMetaData() error {
 }
 
 // persistMetaData atomically writes state to the filesystem
+// 持久化元数据自动写状态给文件系统
 func (d *diskQueue) persistMetaData() error {
 	var f *os.File
 	var err error
@@ -520,6 +533,7 @@ func (d *diskQueue) persistMetaData() error {
 	f.Close()
 
 	// atomically rename
+	// 将临时的文件改为正式文件
 	return os.Rename(tmpFileName, fileName)
 }
 
