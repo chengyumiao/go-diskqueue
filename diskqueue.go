@@ -557,6 +557,8 @@ func (d *diskQueue) fileName(fileNum int64) string {
 
 // 检测冲突
 func (d *diskQueue) checkTailCorruption(depth int64) {
+
+	// 这个属于正常情况
 	if d.readFileNum < d.writeFileNum || d.readPos < d.writePos {
 		return
 	}
@@ -606,7 +608,7 @@ func (d *diskQueue) moveForward() {
 	if oldReadFileNum != d.nextReadFileNum {
 		// sync every time we start reading from a new file
 		d.needSync = true
-
+		// 往前走竟然将此文件删除掉了
 		fn := d.fileName(oldReadFileNum)
 		err := os.Remove(fn)
 		if err != nil {
@@ -705,6 +707,7 @@ func (d *diskQueue) ioLoop() {
 		case r <- dataRead:
 			count++
 			// moveForward sets needSync flag if a file is removed
+			// 如果读取的时候滚动了文件，会删除相关的文件
 			d.moveForward()
 		case d.depthChan <- d.depth:
 		case <-d.emptyChan:
