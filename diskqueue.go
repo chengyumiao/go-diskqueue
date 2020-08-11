@@ -258,13 +258,15 @@ func (d *diskQueue) Empty() error {
 
 	d.logf(INFO, "DISKQUEUE(%s): emptying", d.name)
 
+	// 向清空信号中发送，等待回复
 	d.emptyChan <- 1
 	return <-d.emptyResponseChan
 }
 
 func (d *diskQueue) deleteAllFiles() error {
+	// 将写文件号与读文件号对齐，并且指向最上面
 	err := d.skipToNextRWFile()
-
+	// 删除元文件
 	innerErr := os.Remove(d.metaDataFileName())
 	if innerErr != nil && !os.IsNotExist(innerErr) {
 		d.logf(ERROR, "DISKQUEUE(%s) failed to remove metadata file - %s", d.name, innerErr)
@@ -311,6 +313,8 @@ func (d *diskQueue) skipToNextRWFile() error {
 
 // readOne performs a low level filesystem read for a single []byte
 // while advancing read positions and rolling files, if necessary
+// 支持滚动读，一旦发现读取的文件已经要大于当前文件的大小，则开启下一个读
+// 如果读取报错，说该文件不存在，则会返回文件不存在的报错
 func (d *diskQueue) readOne() ([]byte, error) {
 	var err error
 	var msgSize int32
