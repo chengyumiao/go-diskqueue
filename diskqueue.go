@@ -54,51 +54,75 @@ type Interface interface {
 }
 
 // diskQueue implements a filesystem backed FIFO queue
+// 基于文件系统的FIFO队列
 type diskQueue struct {
 	// 64bit atomic vars need to be first for proper alignment on 32bit platforms
 
 	// run-time state (also persisted to disk)
+	// 读写指针位置
 	readPos      int64
 	writePos     int64
+	// 读写文件数量
 	readFileNum  int64
 	writeFileNum int64
+
 	depth        int64
 
 	sync.RWMutex
 
 	// instantiation time metadata
+	// 队列名字
 	name            string
+	// 队列路径
 	dataPath        string
+	// 每个文件的最大大小
 	maxBytesPerFile int64 // currently this cannot change once created
+	// 最小消息大小
 	minMsgSize      int32
+	// 最大消息大小
 	maxMsgSize      int32
+	// 每多少次写同步一次
 	syncEvery       int64         // number of writes per fsync
+	// 每次同步的耗时
 	syncTimeout     time.Duration // duration of time per fsync
+	// 退出标识位
 	exitFlag        int32
+	// 是否需要同步
 	needSync        bool
 
 	// keeps track of the position where we have read
 	// (but not yet sent over readChan)
+	// 下个读取的位置
 	nextReadPos     int64
+	// 下次读取的文件数量
 	nextReadFileNum int64
-
+	// 读文件标识符
 	readFile  *os.File
+	// 写文件表示符
 	writeFile *os.File
+	// 读缓冲
 	reader    *bufio.Reader
+	// 写缓冲
 	writeBuf  bytes.Buffer
 
 	// exposed via ReadChan()
+	// 通过读chan向外暴露读
 	readChan chan []byte
 
 	// internal channels
 	depthChan         chan int64
+	// 写通道
 	writeChan         chan []byte
+	// 写通道回应
 	writeResponseChan chan error
+
 	emptyChan         chan int
 	emptyResponseChan chan error
+	// 退出通道
 	exitChan          chan int
+	// 退出同步通道
 	exitSyncChan      chan int
-
+	// 日志输出函数
 	logf AppLogFunc
 }
 
