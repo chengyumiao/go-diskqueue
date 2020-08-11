@@ -388,6 +388,7 @@ func (d *diskQueue) readOne() ([]byte, error) {
 
 // writeOne performs a low level filesystem write for a single []byte
 // while advancing write positions and rolling files, if necessary
+// 往文件中追加写
 func (d *diskQueue) writeOne(data []byte) error {
 	var err error
 
@@ -482,6 +483,7 @@ func (d *diskQueue) sync() error {
 }
 
 // retrieveMetaData initializes state from the filesystem
+// 恢复元数据信息
 func (d *diskQueue) retrieveMetaData() error {
 	var f *os.File
 	var err error
@@ -553,6 +555,7 @@ func (d *diskQueue) fileName(fileNum int64) string {
 	return fmt.Sprintf(path.Join(d.dataPath, "%s.diskqueue.%06d.dat"), d.name, fileNum)
 }
 
+// 检测冲突
 func (d *diskQueue) checkTailCorruption(depth int64) {
 	if d.readFileNum < d.writeFileNum || d.readPos < d.writePos {
 		return
