@@ -273,7 +273,7 @@ func (d *diskQueue) skipToNextRWFile() error {
 		d.writeFile = nil
 	}
 
-	for i := d.readFileNum; i <= d.writeFileNum; i++ {
+	for i := int64(0); i <= d.writeFileNum; i++ {
 		fn := d.fileName(i)
 		// 删除对应的文件
 		innerErr := os.Remove(fn)
@@ -542,13 +542,6 @@ func (d *diskQueue) moveForward() {
 	if oldReadFileNum != d.nextReadFileNum {
 		// sync every time we start reading from a new file
 		d.needSync = true
-		// 往前走竟然将此文件删除掉了
-		fn := d.fileName(oldReadFileNum)
-		// 这个文件就不要删除了，留着上层去删除
-		err := os.Remove(fn)
-		if err != nil {
-			d.logf(ERROR, "DISKQUEUE(%s) failed to Remove(%s) - %s", d.name, fn, err)
-		}
 	}
 }
 
@@ -565,20 +558,8 @@ func (d *diskQueue) handleReadError() {
 		d.writeFileNum++
 		d.writePos = 0
 	}
-
-	badFn := d.fileName(d.readFileNum)
-	badRenameFn := badFn + ".bad"
-
-	d.logf(WARN,
-		"DISKQUEUE(%s) jump to next file and saving bad file as %s",
-		d.name, badRenameFn)
-
-	err := os.Rename(badFn, badRenameFn)
-	if err != nil {
-		d.logf(ERROR,
-			"DISKQUEUE(%s) failed to rename bad diskqueue file %s to %s",
-			d.name, badFn, badRenameFn)
-	}
+	
+	// 切换一个新的队列去读取
 
 	d.readFileNum++
 	d.readPos = 0
