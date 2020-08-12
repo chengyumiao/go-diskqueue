@@ -48,7 +48,6 @@ type Interface interface {
 	Put([]byte) error
 	ReadChan() <-chan []byte // this is expected to be an *unbuffered* channel
 	Close() error
-	Delete() error
 	// 清空某个队列相关所有的相关信息
 	Empty() error
 }
@@ -182,7 +181,7 @@ func (d *diskQueue) Put(data []byte) error {
 // Close cleans up the queue and persists metadata
 func (d *diskQueue) Close() error {
 	// 退出
-	err := d.exit(false)
+	err := d.exit()
 	if err != nil {
 		return err
 	}
@@ -190,23 +189,12 @@ func (d *diskQueue) Close() error {
 	return d.sync()
 }
 
-func (d *diskQueue) Delete() error {
-	return d.exit(true)
-}
-
 // 退出
-func (d *diskQueue) exit(deleted bool) error {
+func (d *diskQueue) exit() error {
 	d.Lock()
 	defer d.Unlock()
 
 	d.exitFlag = 1
-
-	if deleted {
-		d.logf(INFO, "DISKQUEUE(%s): deleting", d.name)
-	} else {
-		d.logf(INFO, "DISKQUEUE(%s): closing", d.name)
-	}
-
 	// 关闭退出通道
 	close(d.exitChan)
 	// ensure that ioLoop has exited
