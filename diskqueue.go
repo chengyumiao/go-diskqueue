@@ -49,7 +49,7 @@ type Interface interface {
 	ReadChan() <-chan []byte // this is expected to be an *unbuffered* channel
 	Close() error
 	Delete() error
-	Depth() int64
+	// 清空某个队列相关所有的相关信息
 	Empty() error
 }
 
@@ -65,9 +65,6 @@ type diskQueue struct {
 	// 读写文件数量
 	readFileNum  int64
 	writeFileNum int64
-
-	depth int64
-
 	sync.RWMutex
 
 	// instantiation time metadata
@@ -109,8 +106,6 @@ type diskQueue struct {
 	// 通过读chan向外暴露读
 	readChan chan []byte
 
-	// internal channels
-	depthChan chan int64
 	// 写通道
 	writeChan chan []byte
 	// 写通道回应
@@ -140,7 +135,6 @@ func New(name string, dataPath string, maxBytesPerFile int64,
 		minMsgSize:        minMsgSize,
 		maxMsgSize:        maxMsgSize,
 		readChan:          make(chan []byte),
-		depthChan:         make(chan int64),
 		writeChan:         make(chan []byte),
 		writeResponseChan: make(chan error),
 		emptyChan:         make(chan int),
@@ -163,16 +157,6 @@ func New(name string, dataPath string, maxBytesPerFile int64,
 	// 启动循环
 	go d.ioLoop()
 	return &d
-}
-
-// Depth returns the depth of the queue
-func (d *diskQueue) Depth() int64 {
-	depth, ok := <-d.depthChan
-	if !ok {
-		// ioLoop exited
-		depth = d.depth
-	}
-	return depth
 }
 
 // ReadChan returns the receive-only []byte channel for reading data
@@ -228,8 +212,6 @@ func (d *diskQueue) exit(deleted bool) error {
 	// ensure that ioLoop has exited
 	// 等待同步完成通道
 	<-d.exitSyncChan
-	// 关闭深度通道
-	close(d.depthChan)
 
 	// 关闭读文件描述符
 	if d.readFile != nil {
@@ -277,6 +259,7 @@ func (d *diskQueue) deleteAllFiles() error {
 }
 
 // 跳过所有没有读的文件，并删除这些需要读的文件，直接将readFileNum 到 writeFileNum 对齐到 writeFileNum下一个。
+// 如果不希望滚动，那么要自己控制这个函数
 func (d *diskQueue) skipToNextRWFile() error {
 	var err error
 
@@ -306,7 +289,6 @@ func (d *diskQueue) skipToNextRWFile() error {
 	d.readPos = 0
 	d.nextReadFileNum = d.writeFileNum
 	d.nextReadPos = 0
-	d.depth = 0
 
 	return err
 }
@@ -438,7 +420,6 @@ func (d *diskQueue) writeOne(data []byte) error {
 
 	totalBytes := int64(4 + dataLen)
 	d.writePos += totalBytes
-	d.depth += 1
 
 	if d.writePos >= d.maxBytesPerFile {
 		d.writeFileNum++
@@ -496,16 +477,13 @@ func (d *diskQueue) retrieveMetaData() error {
 	}
 	defer f.Close()
 
-	var depth int64
 	// 读取元文件中的信息
-	_, err = fmt.Fscanf(f, "%d\n%d,%d\n%d,%d\n",
-		&depth,
+	_, err = fmt.Fscanf(f, "%d,%d\n%d,%d\n",
 		&d.readFileNum, &d.readPos,
 		&d.writeFileNum, &d.writePos)
 	if err != nil {
 		return err
 	}
-	d.depth = depth
 	d.nextReadFileNum = d.readFileNum
 	d.nextReadPos = d.readPos
 
@@ -527,8 +505,8 @@ func (d *diskQueue) persistMetaData() error {
 		return err
 	}
 
-	_, err = fmt.Fprintf(f, "%d\n%d,%d\n%d,%d\n",
-		d.depth,
+	// 每次重启的时候需要将readFileNum，readPos都置为0
+	_, err = fmt.Fprintf(f, "%d,%d\n%d,%d\n",
 		d.readFileNum, d.readPos,
 		d.writeFileNum, d.writePos)
 	if err != nil {
@@ -555,54 +533,10 @@ func (d *diskQueue) fileName(fileNum int64) string {
 	return fmt.Sprintf(path.Join(d.dataPath, "%s.diskqueue.%06d.dat"), d.name, fileNum)
 }
 
-// 检测冲突
-func (d *diskQueue) checkTailCorruption(depth int64) {
-
-	// 这个属于正常情况
-	if d.readFileNum < d.writeFileNum || d.readPos < d.writePos {
-		return
-	}
-
-	// we've reached the end of the diskqueue
-	// if depth isn't 0 something went wrong
-	if depth != 0 {
-		if depth < 0 {
-			d.logf(ERROR,
-				"DISKQUEUE(%s) negative depth at tail (%d), metadata corruption, resetting 0...",
-				d.name, depth)
-		} else if depth > 0 {
-			d.logf(ERROR,
-				"DISKQUEUE(%s) positive depth at tail (%d), data loss, resetting 0...",
-				d.name, depth)
-		}
-		// force set depth 0
-		d.depth = 0
-		d.needSync = true
-	}
-
-	if d.readFileNum != d.writeFileNum || d.readPos != d.writePos {
-		if d.readFileNum > d.writeFileNum {
-			d.logf(ERROR,
-				"DISKQUEUE(%s) readFileNum > writeFileNum (%d > %d), corruption, skipping to next writeFileNum and resetting 0...",
-				d.name, d.readFileNum, d.writeFileNum)
-		}
-
-		if d.readPos > d.writePos {
-			d.logf(ERROR,
-				"DISKQUEUE(%s) readPos > writePos (%d > %d), corruption, skipping to next writeFileNum and resetting 0...",
-				d.name, d.readPos, d.writePos)
-		}
-
-		d.skipToNextRWFile()
-		d.needSync = true
-	}
-}
-
 func (d *diskQueue) moveForward() {
 	oldReadFileNum := d.readFileNum
 	d.readFileNum = d.nextReadFileNum
 	d.readPos = d.nextReadPos
-	d.depth -= 1
 
 	// see if we need to clean up the old file
 	if oldReadFileNum != d.nextReadFileNum {
@@ -610,13 +544,12 @@ func (d *diskQueue) moveForward() {
 		d.needSync = true
 		// 往前走竟然将此文件删除掉了
 		fn := d.fileName(oldReadFileNum)
+		// 这个文件就不要删除了，留着上层去删除
 		err := os.Remove(fn)
 		if err != nil {
 			d.logf(ERROR, "DISKQUEUE(%s) failed to Remove(%s) - %s", d.name, fn, err)
 		}
 	}
-
-	d.checkTailCorruption(d.depth)
 }
 
 // 处理错误，将原先的文件名字，改为 名字.bad
@@ -712,8 +645,6 @@ func (d *diskQueue) ioLoop() {
 			// moveForward sets needSync flag if a file is removed
 			// 如果读取的时候滚动了文件，会删除相关的文件
 			d.moveForward()
-		// 一旦depthChan为空则将当前depth传输给相关通道
-		case d.depthChan <- d.depth:
 		// 收到清空的信号，则删除元文件，以及相关文件所有的数据文件，删除的消息赋给清空回复信号
 		case <-d.emptyChan:
 			d.emptyResponseChan <- d.deleteAllFiles()

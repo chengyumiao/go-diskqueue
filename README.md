@@ -5,3 +5,10 @@
 A Go package providing a filesystem-backed FIFO queue
 
 Pulled out of https://github.com/nsqio/nsq
+
+## 说明：基于go-diskqueue的改造版本
+- 去除原先depth属性
+- 去除自动轮转与自动删除的策略，为了适应某些场景需要重新读取队列
+- 增加基于时间轮转的功能，每过一个时间周期，轮转一次队列的实际存储名字
+- 
+
