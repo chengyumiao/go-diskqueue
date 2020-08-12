@@ -83,7 +83,7 @@ type diskQueue struct {
 	maxMsgSize int32
 	// 每多少次写同步一次
 	syncEvery int64 // number of writes per fsync
-	// 每次同步的耗时
+	// 最迟的同步时间，如果一段时间没有同步，则开启同步
 	syncTimeout time.Duration // duration of time per fsync
 	// 退出标识位
 	exitFlag int32
@@ -712,19 +712,24 @@ func (d *diskQueue) ioLoop() {
 			// moveForward sets needSync flag if a file is removed
 			// 如果读取的时候滚动了文件，会删除相关的文件
 			d.moveForward()
+		// 一旦depthChan为空则将当前depth传输给相关通道
 		case d.depthChan <- d.depth:
+		// 收到清空的信号，则删除元文件，以及相关文件所有的数据文件，删除的消息赋给清空回复信号
 		case <-d.emptyChan:
 			d.emptyResponseChan <- d.deleteAllFiles()
 			count = 0
+		// 写通道里面收到写信号，开始写动作，并将回应发送给写回应通道里面
 		case dataWrite := <-d.writeChan:
 			count++
 			d.writeResponseChan <- d.writeOne(dataWrite)
+		// 定期去看看是否需要同步
 		case <-syncTicker.C:
 			if count == 0 {
 				// avoid sync when there's no activity
 				continue
 			}
 			d.needSync = true
+		// 收到退出信号，则退出
 		case <-d.exitChan:
 			goto exit
 		}
