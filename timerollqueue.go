@@ -1,6 +1,9 @@
 package diskqueue
 
-import "time"
+import (
+	"strconv"
+	"time"
+)
 
 const (
 	DefaultName            = "timerollqueue"
@@ -10,16 +13,18 @@ const (
 	DefaultMaxMsgSize      = 4 * 1024 * 1024
 	DefaultSyncEvery       = 5000
 	DefaultSyncTimeout     = 2 * time.Second
+	DefaultRollTimeSpan    = 2 * 3600
 )
 
 type Options struct {
 	Name            string        `json:"WALTimeRollQueue.Name"`
 	DataPath        string        `json:"WALTimeRollQueue.DataPath"`
 	MaxBytesPerFile int64         `json:"WALTimeRollQueue.MaxBytesPerFile"`
-	MinMsgSize      int64         `json:"WALTimeRollQueue.MinMsgSize"`
-	MaxMsgSize      int64         `json:"WALTimeRollQueue.MaxMsgSize"`
+	MinMsgSize      int32         `json:"WALTimeRollQueue.MinMsgSize"`
+	MaxMsgSize      int32         `json:"WALTimeRollQueue.MaxMsgSize"`
 	SyncEvery       int64         `json:"WALTimeRollQueue.SyncEvery"`
 	SyncTimeout     time.Duration `json:"WALTimeRollQueue.SyncTimeout"`
+	RollTimeSpan    int32         `json:"WALTimeRollQueue.RollTimeSpan"`
 }
 
 func DefaultOption() *Options {
@@ -31,6 +36,7 @@ func DefaultOption() *Options {
 		MaxMsgSize:      DefaultMaxMsgSize,
 		SyncEvery:       DefaultSyncEvery,
 		SyncTimeout:     DefaultSyncTimeout,
+		RollTimeSpan:    DefaultRollTimeSpan,
 	}
 }
 
@@ -49,6 +55,8 @@ type WALTimeRollQueueI interface {
 	DeleteForezen() error
 	// 删除repair队列
 	DeleteRepairs() error
+	// 获取新的滚动队列
+	GetNewActiveQueueName() string
 }
 
 type WALTimeRollQueue struct {
@@ -73,6 +81,16 @@ type WALTimeRollQueue struct {
 	syncEvery int64 // number of writes per fsync
 	// 最迟的同步时间，如果一段时间没有同步，则开启同步
 	syncTimeout time.Duration // duration of time per fsync
+	// 滚动的时间间隔，单位为s
+	rollTimeSpan int32
+}
+
+func (w *WALTimeRollQueue) GetNewActiveQueueName() string {
+	return w.name + "_" + strconv.Itoa(int(time.Now().Unix()))
+}
+
+func (w *WALTimeRollQueue) Init() {
+
 }
 
 func (w *WALTimeRollQueue) Put(msg []byte) error {
@@ -97,16 +115,17 @@ func (w *WALTimeRollQueue) DeleteRepairs() error {
 	return nil
 }
 
-func NewTimeRollQueue(name string, dataPath string, maxBytesPerFile int64,
-	minMsgSize int32, maxMsgSize int32,
-	syncEvery int64, syncTimeout time.Duration, logf AppLogFunc) WALTimeRollQueueI {
-
-	if name == "" {
-
-	}
+func NewTimeRollQueue(logf AppLogFunc, options Options) WALTimeRollQueueI {
 
 	return &WALTimeRollQueue{
-		activeQueue: New(name),
+		name:            options.Name,
+		dataPath:        options.DataPath,
+		maxBytesPerFile: options.MaxBytesPerFile,
+		minMsgSize:      options.MinMsgSize,
+		maxMsgSize:      options.MinMsgSize,
+		syncEvery:       options.SyncEvery,
+		syncTimeout:     options.SyncTimeout,
+		rollTimeSpan:    options.RollTimeSpan,
 	}
 
 }
