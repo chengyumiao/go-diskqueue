@@ -49,6 +49,8 @@ type Interface interface {
 	Put([]byte) error
 	ReadChan() <-chan []byte // this is expected to be an *unbuffered* channel
 	Close() error
+	// 判断是否已经读完当前队列里面的消息
+	JudgeNoMessage() bool
 	// 清空某个队列相关所有的相关信息
 	Empty() error
 	ResetReadMetaData() error
@@ -112,6 +114,9 @@ type diskQueue struct {
 	// 写通道回应
 	writeResponseChan chan error
 
+	// 是否还有消息要读
+	noMessage chan bool
+
 	emptyChan         chan int
 	emptyResponseChan chan error
 	// 退出通道
@@ -142,6 +147,7 @@ func New(name string, dataPath string, maxBytesPerFile int64,
 		emptyResponseChan: make(chan error),
 		exitChan:          make(chan int),
 		exitSyncChan:      make(chan int),
+		noMessage:         make(chan bool, 1),
 		syncEvery:         syncEvery,
 		syncTimeout:       syncTimeout,
 		logf:              logf,
@@ -236,6 +242,15 @@ func (d *diskQueue) Empty() error {
 	// 向清空信号中发送，等待回复
 	d.emptyChan <- 1
 	return <-d.emptyResponseChan
+}
+
+func (d *diskQueue) JudgeNoMessage() bool {
+	select {
+	case <-d.noMessage:
+		return true
+	default:
+		return false
+	}
 }
 
 func (d *diskQueue) deleteAllFiles() error {
@@ -637,6 +652,11 @@ func (d *diskQueue) ioLoop() {
 			r = d.readChan
 		} else {
 			r = nil
+			select {
+			case d.noMessage <- true:
+			default:
+			}
+
 		}
 
 		select {
