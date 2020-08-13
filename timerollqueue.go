@@ -132,6 +132,14 @@ func (w *WALTimeRollQueue) getForezenQueuesTimeStamps() []int {
 	return times
 }
 
+func (w *WALTimeRollQueue) resetQueue(name string) error {
+	q := New(name, w.dataPath, w.maxBytesPerFile, w.minMsgSize, w.maxMsgSize, w.syncEvery, w.syncTimeout, w.logf)
+	if q != nil {
+		return q.ResetReadMetaData()
+	}
+	return nil
+}
+
 func (w *WALTimeRollQueue) delteQueue(name string) error {
 	q := New(name, w.dataPath, w.maxBytesPerFile, w.minMsgSize, w.maxMsgSize, w.syncEvery, w.syncTimeout, w.logf)
 	if q != nil {
@@ -159,7 +167,13 @@ func (w *WALTimeRollQueue) Init() error {
 	w.forezenQueues = []string{}
 	var err error
 	w.repairQueueNames, err = w.getAllRepairQueueNames()
-	return err
+	if err != nil {
+		return err
+	}
+	//刷新所有repair队列的元信息中的readPos， readNum
+	w.ResetRepairs()
+	return nil
+
 }
 
 func (w *WALTimeRollQueue) Roll() {
@@ -215,6 +229,16 @@ func (w *WALTimeRollQueue) DeleteForezenBefore(t int64) {
 		}
 	}
 }
+
+func (w *WALTimeRollQueue) ResetRepairs() {
+	for _, name := range w.repairQueueNames {
+		err := w.resetQueue(name)
+		if err != nil {
+			w.logf(ERROR, "ResetRepairs resetQueue %s", err)
+		}
+	}
+}
+
 func (w *WALTimeRollQueue) DeleteRepairs() {
 	for _, name := range w.repairQueueNames {
 		err := w.delteQueue(name)

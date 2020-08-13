@@ -51,6 +51,7 @@ type Interface interface {
 	Close() error
 	// 清空某个队列相关所有的相关信息
 	Empty() error
+	ResetReadMetaData() error
 }
 
 // diskQueue implements a filesystem backed FIFO queue
@@ -480,6 +481,34 @@ func (d *diskQueue) retrieveMetaData() error {
 	d.nextReadPos = d.readPos
 
 	return nil
+}
+
+// 将元文件的读num，与读位置都设为从头开始
+func (d *diskQueue) ResetReadMetaData() error {
+	var f *os.File
+	var err error
+
+	fileName := d.metaDataFileName()
+	// 打开元文件
+	f, err = os.OpenFile(fileName, os.O_RDONLY, 0600)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	// 读取元文件中的信息
+	_, err = fmt.Fscanf(f, "%d,%d\n%d,%d\n",
+		&d.readFileNum, &d.readPos,
+		&d.writeFileNum, &d.writePos)
+	if err != nil {
+		return err
+	}
+	d.nextReadFileNum = d.readFileNum
+	d.nextReadPos = d.readPos
+
+	d.readFileNum = 0
+	d.readPos = 0
+	return d.persistMetaData()
 }
 
 // persistMetaData atomically writes state to the filesystem
