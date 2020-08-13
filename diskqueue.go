@@ -45,6 +45,7 @@ func (l LogLevel) String() string {
 }
 
 type Interface interface {
+	GetName() string
 	Put([]byte) error
 	ReadChan() <-chan []byte // this is expected to be an *unbuffered* channel
 	Close() error
@@ -156,6 +157,9 @@ func New(name string, dataPath string, maxBytesPerFile int64,
 	// 启动循环
 	go d.ioLoop()
 	return &d
+}
+func (d *diskQueue) GetName() string {
+	return d.name
 }
 
 // ReadChan returns the receive-only []byte channel for reading data
@@ -546,7 +550,7 @@ func (d *diskQueue) handleReadError() {
 		d.writeFileNum++
 		d.writePos = 0
 	}
-	
+
 	// 切换一个新的队列去读取
 
 	d.readFileNum++
