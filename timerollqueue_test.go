@@ -9,17 +9,17 @@ import (
 )
 
 // 基本的写入读取的测试
-func TestBasicWriteRead(t *testing.T) {
+func TestBasicWrite(t *testing.T) {
 	l := NewTestLogger(t)
 	options := DefaultOption()
 
-	tmpDir, err := ioutil.TempDir("", fmt.Sprintf("nsq-test-%d", time.Now().UnixNano()))
+	tmpDir, err := ioutil.TempDir("", fmt.Sprintf("TestBasicWrite-%d", time.Now().UnixNano()))
 	if err != nil {
 		panic(err)
 	}
 	defer os.RemoveAll(tmpDir)
 	options.DataPath = tmpDir
-	options.Name = "TestBasicWriteRead"
+	options.Name = "TestBasicWrite"
 
 	wal := NewTimeRollQueue(l, options)
 
@@ -29,28 +29,90 @@ func TestBasicWriteRead(t *testing.T) {
 	}
 
 	for i := 0; i < 10; i++ {
-		wal.Put([]byte("a"))
+		err := wal.Put([]byte("a"))
+		if err != nil {
+			t.Fatal("Put error", err)
+		}
+	}
+	wal.Close()
+}
+
+func TestGetAllRepairQueueNames(t *testing.T) {
+
+	l := NewTestLogger(t)
+	options := DefaultOption()
+	dirPrefix := fmt.Sprintf("TestGetAllRepairQueueNames-%d", time.Now().UnixNano())
+	tmpDir, err := ioutil.TempDir("", dirPrefix)
+	if err != nil {
+		panic(err)
+	}
+	defer os.RemoveAll(tmpDir)
+	options.DataPath = tmpDir
+	options.Name = "TestGetAllRepairQueueNames"
+	options.MaxBytesPerFile = 32 * 1024
+	options.RollTimeSpan = 5
+
+	wal := NewTimeRollQueue(l, options)
+
+	err = wal.Start()
+	if err != nil {
+		t.Fatal("start err", err)
+	}
+
+	ticker := time.NewTicker(16 * time.Second)
+	exit := false
+	for !exit {
+		select {
+		case <-ticker.C:
+			exit = true
+		default:
+			err := wal.Put([]byte("a"))
+			if err != nil {
+				t.Fatal("Put error", err)
+			}
+		}
+
 	}
 
 	wal.Close()
 
-	wal = NewTimeRollQueue(l, options)
-	msgChan, ok := wal.readChan()
-	if ok {
-		msgBytes := <-msgChan
-		fmt.Println(string(msgBytes))
+	walRecover := &WALTimeRollQueue{
+		Name:            options.Name,
+		dataPath:        options.DataPath,
+		maxBytesPerFile: options.MaxBytesPerFile,
+		minMsgSize:      options.MinMsgSize,
+		maxMsgSize:      options.MaxMsgSize,
+		syncEvery:       options.SyncEvery,
+		syncTimeout:     options.SyncTimeout,
+		rollTimeSpan:    options.RollTimeSpan,
+		backoffDuration: options.BackoffDuration,
+		logf:            l,
 	}
+
+	repairNames, err := walRecover.getAllRepairQueueNames()
+	if err != nil {
+		t.Fatal("getAllRepairQueueNames err ", err)
+	}
+	if len(repairNames) <= 0 {
+		t.Fatal("repair names len err")
+	}
+
+	walRecover.init()
+
+	if len(repairNames) >= 2 {
+		if repairNames[1] != walRecover.getNextRepairQueueName(repairNames[0]) {
+			t.Fatal("getNextRepairQueueName is err")
+		}
+	}
+
 }
 
 // 需要测试的函数
-// func (w *WALTimeRollQueue) getAllRepairQueueNames() ([]string, error) {
-// func (w *WALTimeRollQueue) getNextRepairQueueName(name string) string {
 // func (w *WALTimeRollQueue) getForezenQueuesTimeStamps() []int {
 // func (w *WALTimeRollQueue) resetQueue(name string) error {
 // func (w *WALTimeRollQueue) delteQueue(name string) error {
 // func (w *WALTimeRollQueue) GetNowActiveQueueName() string {
 // func (w *WALTimeRollQueue) GetNextRollTime() int64 {
-// func (w *WALTimeRollQueue) Init() error {
 // func (w *WALTimeRollQueue) Roll() {
 // func (w *WALTimeRollQueue) Put(msg []byte) error {
 // func (w *WALTimeRollQueue) Start() error {

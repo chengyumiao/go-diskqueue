@@ -20,7 +20,7 @@ const (
 	DefaultName            = "timerollqueue"
 	DefaultDataPath        = "."
 	DefaultMaxBytesPerFile = 100 * 1024 * 1024
-	DefaultMinMsgSize      = 32
+	DefaultMinMsgSize      = 0
 	DefaultMaxMsgSize      = 4 * 1024 * 1024
 	DefaultSyncEvery       = 5000
 	DefaultSyncTimeout     = 2 * time.Second
@@ -107,11 +107,10 @@ type WALTimeRollQueue struct {
 	// 每次调用repair process 函数出错后的回退时间
 	backoffDuration time.Duration
 
-	exitChan      chan bool
-	readExitChan  chan bool
-	writeExitChan chan bool
-	logf          AppLogFunc
-	rpf           RepairProcessFunc
+	exitFlag bool
+
+	logf AppLogFunc
+	rpf  RepairProcessFunc
 }
 
 // 排序从大到小
@@ -200,6 +199,10 @@ func (w *WALTimeRollQueue) Roll() {
 	w.Lock()
 	defer w.Unlock()
 
+	if w.exitFlag {
+		return
+	}
+
 	newQueueName := w.GetNowActiveQueueName()
 	if newQueueName == w.activeQueue.GetName() {
 		return
@@ -218,73 +221,67 @@ func (w *WALTimeRollQueue) Roll() {
 
 func (w *WALTimeRollQueue) Put(msg []byte) error {
 
-	select {
-	case <-w.exitChan:
-		return errors.New("WALTimeRollQueue exit...")
-	default:
-		if time.Now().Unix() > w.nextRollTime {
-			// 随机睡眠一下，防止大家共同进入加锁
-			time.Sleep(time.Microsecond * time.Duration(rand.Intn(500)))
-			w.Roll()
-		}
-		return w.activeQueue.Put(msg)
+	if w.exitFlag {
+		return errors.New("WALTimeRollQueue exit Flag is true")
 	}
+
+	if time.Now().Unix() > w.nextRollTime {
+		// 随机睡眠一下，防止大家共同进入加锁
+		time.Sleep(time.Microsecond * time.Duration(rand.Intn(500)))
+		w.Roll()
+	}
+	return w.activeQueue.Put(msg)
 
 }
 
 func (w *WALTimeRollQueue) Start() error {
-	err := w.Init()
+	err := w.init()
 	if err != nil {
 		return err
 	}
 	// 开启一个读go程去从repair队列中将读出来，等待上层取走，一旦读通道空出来则开始读，第一次读的时候去返回一个空的消息
-	go func() {
+	// go func() {
 
-		for {
-			select {
-			case <-w.exitChan:
-				close(w.readExitChan)
-				return
-			default:
-				msgChan, ok := w.readChan()
-				if !ok {
-					w.logf(INFO, "WALTimeRollQueue repair finish...")
-					w.DeleteRepairs()
-					w.logf(INFO, "WALTimeRollQueue delete repair queues")
-					close(w.readExitChan)
-					return
-				} else {
-					if msgChan == nil {
-						continue
-					} else {
-						msg := <-msgChan
-						for {
-							ok := w.rpf(msg)
-							if !ok {
-								w.logf(ERROR, "WALTimeRollQueue process repair message failed")
-								time.Sleep(w.backoffDuration)
-							}
-						}
-					}
+	// 	for {
+	// 		select {
+	// 		case <-w.exitChan:
+	// 			close(w.readExitChan)
+	// 			return
+	// 		default:
+	// 			msgChan, ok := w.readChan()
+	// 			if !ok {
+	// 				w.logf(INFO, "WALTimeRollQueue repair finish...")
+	// 				w.DeleteRepairs()
+	// 				w.logf(INFO, "WALTimeRollQueue delete repair queues")
+	// 				return
+	// 			} else {
+	// 				if msgChan == nil {
+	// 					continue
+	// 				} else {
+	// 					msg := <-msgChan
+	// 					for {
+	// 						ok := w.rpf(msg)
+	// 						if !ok {
+	// 							w.logf(ERROR, "WALTimeRollQueue process repair message failed")
+	// 							time.Sleep(w.backoffDuration)
+	// 						}
+	// 					}
+	// 				}
 
-				}
-			}
-		}
-	}()
+	// 			}
+	// 		}
+	// 	}
+	// }()
 
 	return nil
 }
 
 func (w *WALTimeRollQueue) readChan() (<-chan []byte, bool) {
 
-	select {
-	case <-w.exitChan:
+	if w.exitFlag {
 		return nil, true
-	default:
-		goto DO
 	}
 
-DO:
 	if w.activeRepairQueue == nil {
 		return nil, false
 	} else {
@@ -304,17 +301,10 @@ DO:
 
 }
 
-func (w *WALTimeRollQueue) CloseWrite() error {
-	return w.activeQueue.Close()
-}
-
 func (w *WALTimeRollQueue) Close() {
 	w.Lock()
 	defer w.Unlock()
-	// 发送退出信号
-	close(w.exitChan)
-	// 等待读退出
-	<-w.readExitChan
+
 	if w.activeRepairQueue != nil {
 		err := w.activeRepairQueue.Close()
 		if err != nil {
@@ -322,12 +312,15 @@ func (w *WALTimeRollQueue) Close() {
 		}
 	}
 
-	err := w.CloseWrite()
-	if err != nil {
-		w.logf(ERROR, "WALTimeRollQueue CloseWrite %s", err)
+	if w.activeQueue != nil {
+		err := w.activeQueue.Close()
+		if err != nil {
+			w.logf(ERROR, "WALTimeRollQueue CloseWrite %s", err)
+		}
 	}
 
 }
+
 func (w *WALTimeRollQueue) DeleteForezenBefore(t int64) {
 	forezenTimes := w.getForezenQueuesTimeStamps()
 	for _, time := range forezenTimes {
@@ -365,21 +358,17 @@ func NewTimeRollQueue(log AppLogFunc, options *Options) WALTimeRollQueueI {
 		dataPath:        options.DataPath,
 		maxBytesPerFile: options.MaxBytesPerFile,
 		minMsgSize:      options.MinMsgSize,
-		maxMsgSize:      options.MinMsgSize,
+		maxMsgSize:      options.MaxMsgSize,
 		syncEvery:       options.SyncEvery,
 		syncTimeout:     options.SyncTimeout,
 		rollTimeSpan:    options.RollTimeSpan,
 		backoffDuration: options.BackoffDuration,
 		logf:            log,
-
-		exitChan:      make(chan bool),
-		writeExitChan: make(chan bool),
-		readExitChan:  make(chan bool),
 	}
 
 }
 
-func (w *WALTimeRollQueue) Init() error {
+func (w *WALTimeRollQueue) init() error {
 	// 每次启动的时候用当前最新时间
 	w.activeQueue = New(w.Name+"_"+strconv.Itoa(int(time.Now().Unix())), w.dataPath, w.maxBytesPerFile, w.minMsgSize, w.maxMsgSize, w.syncEvery, w.syncTimeout, w.logf)
 	w.nextRollTime = w.GetNextRollTime()
