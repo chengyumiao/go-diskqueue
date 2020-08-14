@@ -37,7 +37,7 @@ func TestBasicWrite(t *testing.T) {
 	wal.Close()
 }
 
-func TestGetAllRepairQueueNames(t *testing.T) {
+func TestRepairQueue(t *testing.T) {
 
 	l := NewTestLogger(t)
 	options := DefaultOption()
@@ -105,6 +105,22 @@ func TestGetAllRepairQueueNames(t *testing.T) {
 		}
 	}
 
+	walRecover.ResetRepairs()
+
+	for _, repairQueue := range walRecover.repairQueueNames {
+
+		rq := New(repairQueue, walRecover.dataPath, walRecover.maxBytesPerFile, walRecover.minMsgSize, walRecover.maxMsgSize, walRecover.syncEvery, walRecover.syncTimeout, walRecover.logf)
+		rqDiskQueue, ok := rq.(*diskQueue)
+		if !ok {
+			t.Fatal("change to diskqueue panic")
+		}
+		rqDiskQueue.readFileNum = rqDiskQueue.writeFileNum
+		rqDiskQueue.readPos = rqDiskQueue.writePos
+		rqDiskQueue.persistMetaData()
+	}
+
+	walRecover.DeleteRepairs()
+
 }
 
 // 需要测试的函数
@@ -120,5 +136,3 @@ func TestGetAllRepairQueueNames(t *testing.T) {
 // func (w *WALTimeRollQueue) CloseWrite() error {
 // func (w *WALTimeRollQueue) Close() {
 // func (w *WALTimeRollQueue) DeleteForezenBefore(t int64) {
-// func (w *WALTimeRollQueue) ResetRepairs() {
-// func (w *WALTimeRollQueue) DeleteRepairs() {
