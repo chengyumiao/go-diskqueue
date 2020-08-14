@@ -46,7 +46,10 @@ func TestRepairQueue(t *testing.T) {
 	if err != nil {
 		panic(err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() {
+		os.RemoveAll(tmpDir)
+	}()
+
 	options.DataPath = tmpDir
 	options.Name = "TestGetAllRepairQueueNames"
 	options.MaxBytesPerFile = 32 * 1024
@@ -105,8 +108,6 @@ func TestRepairQueue(t *testing.T) {
 		}
 	}
 
-	walRecover.ResetRepairs()
-
 	for _, repairQueue := range walRecover.repairQueueNames {
 
 		rq := New(repairQueue, walRecover.dataPath, walRecover.maxBytesPerFile, walRecover.minMsgSize, walRecover.maxMsgSize, walRecover.syncEvery, walRecover.syncTimeout, walRecover.logf)
@@ -116,7 +117,42 @@ func TestRepairQueue(t *testing.T) {
 		}
 		rqDiskQueue.readFileNum = rqDiskQueue.writeFileNum
 		rqDiskQueue.readPos = rqDiskQueue.writePos
-		rqDiskQueue.persistMetaData()
+		err := rqDiskQueue.persistMetaData()
+		if err != nil {
+			t.Fatal("persistMetaData", err)
+		}
+	}
+
+	walRecover.ResetRepairs()
+
+	for _, repairQueue := range walRecover.repairQueueNames {
+
+		rq := New(repairQueue, walRecover.dataPath, walRecover.maxBytesPerFile, walRecover.minMsgSize, walRecover.maxMsgSize, walRecover.syncEvery, walRecover.syncTimeout, walRecover.logf)
+		rqDiskQueue, ok := rq.(*diskQueue)
+		if !ok {
+			t.Fatal("change to diskqueue panic")
+		}
+
+		if rqDiskQueue.readFileNum != 0 || rqDiskQueue.readPos != 0 {
+			t.Fatal("readFileNum != 0 or readPos != 0")
+		}
+
+	}
+
+	walRecover.ResetRepairs()
+
+	for _, repairQueue := range walRecover.repairQueueNames {
+
+		rq := New(repairQueue, walRecover.dataPath, walRecover.maxBytesPerFile, walRecover.minMsgSize, walRecover.maxMsgSize, walRecover.syncEvery, walRecover.syncTimeout, walRecover.logf)
+		rqDiskQueue, ok := rq.(*diskQueue)
+		if !ok {
+			t.Fatal("change to diskqueue panic")
+		}
+
+		if rqDiskQueue.readFileNum != 0 || rqDiskQueue.readPos != 0 {
+			t.Fatal("readFileNum != 0 or readPos != 0")
+		}
+
 	}
 
 	walRecover.DeleteRepairs()
