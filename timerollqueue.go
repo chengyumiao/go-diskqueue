@@ -26,7 +26,8 @@ const (
 	DefaultSyncTimeout     = 2 * time.Second
 	DefaultRollTimeSpan    = 2 * 3600
 	DefaultBackoffDuration = 100 * time.Millisecond
-
+	DefaultLimiterDuration = 20 * time.Microsecond
+	L
 	QueueMetaSuffix = ".diskqueue.meta.dat"
 )
 
@@ -40,6 +41,7 @@ type Options struct {
 	SyncTimeout     time.Duration `json:"WALTimeRollQueue.SyncTimeout"`
 	RollTimeSpan    int64         `json:"WALTimeRollQueue.RollTimeSpan"`
 	BackoffDuration time.Duration `json:"WALTimeRollQueue.BackoffDuration"`
+	LimiterDuration time.Duration `json:"WALTimeRollQueue.LimiterDuration"`
 }
 
 func DefaultOption() *Options {
@@ -53,6 +55,7 @@ func DefaultOption() *Options {
 		SyncTimeout:     DefaultSyncTimeout,
 		RollTimeSpan:    DefaultRollTimeSpan,
 		BackoffDuration: DefaultBackoffDuration,
+		LimiterDuration: DefaultLimiterDuration,
 	}
 }
 
@@ -106,8 +109,11 @@ type WALTimeRollQueue struct {
 	nextRollTime int64
 	// 每次调用repair process 函数出错后的回退时间
 	backoffDuration time.Duration
+	// 控制读取频率，每次读取后主动睡眠时间，防止读取过快
+	limiterDuration time.Duration
 
-	exitFlag bool
+	finishFlag bool
+	exitFlag   bool
 
 	logf AppLogFunc
 	rpf  RepairProcessFunc
@@ -234,44 +240,49 @@ func (w *WALTimeRollQueue) Put(msg []byte) error {
 
 }
 
+func (w *WALTimeRollQueue) repair() {
+
+	// 开启一个读go程去从repair队列中将读出来，等待上层取走，一旦读通道空出来则开始读，第一次读的时候去返回一个空的消息
+	for {
+		// 如果发现退出标志为真，那么直接退出
+		if w.exitFlag {
+			return
+		}
+
+		msgChan, ok := w.readChan()
+
+		if !ok {
+			w.finishFlag = true
+		}
+
+		if msgChan == nil {
+			continue
+		} else {
+			msg := <-msgChan
+			if msg == nil {
+				continue
+			}
+			for {
+				ok := w.rpf(msg)
+				if !ok {
+					w.logf(ERROR, "WALTimeRollQueue process repair message failed")
+					time.Sleep(w.backoffDuration)
+				} else {
+					// 按照这个速度，恢复的时候最快也就是5w个点每秒
+					time.Sleep(w.limiterDuration)
+				}
+			}
+		}
+
+	}
+
+}
+
 func (w *WALTimeRollQueue) Start() error {
 	err := w.init()
 	if err != nil {
 		return err
 	}
-	// 开启一个读go程去从repair队列中将读出来，等待上层取走，一旦读通道空出来则开始读，第一次读的时候去返回一个空的消息
-	// go func() {
-
-	// 	for {
-	// 		select {
-	// 		case <-w.exitChan:
-	// 			close(w.readExitChan)
-	// 			return
-	// 		default:
-	// 			msgChan, ok := w.readChan()
-	// 			if !ok {
-	// 				w.logf(INFO, "WALTimeRollQueue repair finish...")
-	// 				w.DeleteRepairs()
-	// 				w.logf(INFO, "WALTimeRollQueue delete repair queues")
-	// 				return
-	// 			} else {
-	// 				if msgChan == nil {
-	// 					continue
-	// 				} else {
-	// 					msg := <-msgChan
-	// 					for {
-	// 						ok := w.rpf(msg)
-	// 						if !ok {
-	// 							w.logf(ERROR, "WALTimeRollQueue process repair message failed")
-	// 							time.Sleep(w.backoffDuration)
-	// 						}
-	// 					}
-	// 				}
-
-	// 			}
-	// 		}
-	// 	}
-	// }()
 
 	return nil
 }
