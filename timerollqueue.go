@@ -66,7 +66,7 @@ type WALTimeRollQueueI interface {
 	Start() error
 	// 读取消息，只会从repair队列中读取消息，不会去读取当前队列的消息
 	// 不停地读消息，如果能读到则返回ok，否则返回false
-	ReadChan() (<-chan []byte, bool) // this is expected to be an *unbuffered* channel
+	readChan() (<-chan []byte, bool) // this is expected to be an *unbuffered* channel
 	// 关闭：关闭activeQueue并且同步磁盘
 	Close()
 	// 删除某个时间戳之前的冷冻队列
@@ -194,25 +194,6 @@ func (w *WALTimeRollQueue) GetNextRollTime() int64 {
 	return time.Now().Unix()/w.rollTimeSpan*w.rollTimeSpan + w.rollTimeSpan
 }
 
-func (w *WALTimeRollQueue) Init() error {
-	// 每次启动的时候用当前最新时间
-	w.activeQueue = New(w.Name+"_"+strconv.Itoa(int(time.Now().Unix())), w.dataPath, w.maxBytesPerFile, w.minMsgSize, w.maxMsgSize, w.syncEvery, w.syncTimeout, w.logf)
-	w.nextRollTime = w.GetNextRollTime()
-	w.forezenQueues = []string{}
-	var err error
-	w.repairQueueNames, err = w.getAllRepairQueueNames()
-	if len(w.repairQueueNames) > 0 {
-		w.activeRepairQueue = New(w.repairQueueNames[0], w.dataPath, w.maxBytesPerFile, w.minMsgSize, w.maxMsgSize, w.syncEvery, w.syncTimeout, w.logf)
-	}
-	if err != nil {
-		return err
-	}
-	//刷新所有repair队列的元信息中的readPos， readNum
-	w.ResetRepairs()
-	return nil
-
-}
-
 // 并发安全的，多个进程同时发起Roll，那么只有一个会成功
 func (w *WALTimeRollQueue) Roll() {
 
@@ -246,8 +227,6 @@ func (w *WALTimeRollQueue) Put(msg []byte) error {
 			time.Sleep(time.Microsecond * time.Duration(rand.Intn(500)))
 			w.Roll()
 		}
-		w.Lock()
-		defer w.Unlock()
 		return w.activeQueue.Put(msg)
 	}
 
@@ -267,7 +246,7 @@ func (w *WALTimeRollQueue) Start() error {
 				close(w.readExitChan)
 				return
 			default:
-				msgChan, ok := w.ReadChan()
+				msgChan, ok := w.readChan()
 				if !ok {
 					w.logf(INFO, "WALTimeRollQueue repair finish...")
 					w.DeleteRepairs()
@@ -296,7 +275,7 @@ func (w *WALTimeRollQueue) Start() error {
 	return nil
 }
 
-func (w *WALTimeRollQueue) ReadChan() (<-chan []byte, bool) {
+func (w *WALTimeRollQueue) readChan() (<-chan []byte, bool) {
 
 	select {
 	case <-w.exitChan:
@@ -317,7 +296,7 @@ DO:
 				return nil, false
 			}
 			w.activeRepairQueue = New(newRepairQueue, w.dataPath, w.maxBytesPerFile, w.minMsgSize, w.maxMsgSize, w.syncEvery, w.syncTimeout, w.logf)
-			return w.ReadChan()
+			return w.readChan()
 		}
 
 		return w.activeRepairQueue.ReadChan(), true
@@ -326,8 +305,6 @@ DO:
 }
 
 func (w *WALTimeRollQueue) CloseWrite() error {
-	w.Lock()
-	defer w.Unlock()
 	return w.activeQueue.Close()
 }
 
@@ -335,7 +312,7 @@ func (w *WALTimeRollQueue) Close() {
 	w.Lock()
 	defer w.Unlock()
 	// 发送退出信号
-	w.exitChan <- true
+	close(w.exitChan)
 	// 等待读退出
 	<-w.readExitChan
 	if w.activeRepairQueue != nil {
@@ -381,7 +358,7 @@ func (w *WALTimeRollQueue) DeleteRepairs() {
 	}
 }
 
-func NewTimeRollQueue(log AppLogFunc, options Options) WALTimeRollQueueI {
+func NewTimeRollQueue(log AppLogFunc, options *Options) WALTimeRollQueueI {
 
 	return &WALTimeRollQueue{
 		Name:            options.Name,
@@ -399,5 +376,24 @@ func NewTimeRollQueue(log AppLogFunc, options Options) WALTimeRollQueueI {
 		writeExitChan: make(chan bool),
 		readExitChan:  make(chan bool),
 	}
+
+}
+
+func (w *WALTimeRollQueue) Init() error {
+	// 每次启动的时候用当前最新时间
+	w.activeQueue = New(w.Name+"_"+strconv.Itoa(int(time.Now().Unix())), w.dataPath, w.maxBytesPerFile, w.minMsgSize, w.maxMsgSize, w.syncEvery, w.syncTimeout, w.logf)
+	w.nextRollTime = w.GetNextRollTime()
+	w.forezenQueues = []string{}
+	var err error
+	w.repairQueueNames, err = w.getAllRepairQueueNames()
+	if len(w.repairQueueNames) > 0 {
+		w.activeRepairQueue = New(w.repairQueueNames[0], w.dataPath, w.maxBytesPerFile, w.minMsgSize, w.maxMsgSize, w.syncEvery, w.syncTimeout, w.logf)
+	}
+	if err != nil {
+		return err
+	}
+	//刷新所有repair队列的元信息中的readPos， readNum
+	w.ResetRepairs()
+	return nil
 
 }

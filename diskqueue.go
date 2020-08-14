@@ -212,6 +212,10 @@ func (d *diskQueue) exit() error {
 	d.Lock()
 	defer d.Unlock()
 
+	if d.exitFlag == 1 {
+		return errors.New("diskQueue is exiting ...")
+	}
+
 	d.exitFlag = 1
 	// 关闭退出通道
 	close(d.exitChan)
