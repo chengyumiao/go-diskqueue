@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io/ioutil"
+	_ "net/http/pprof"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -147,7 +148,6 @@ func TestDiskQueueEmpty(t *testing.T) {
 		<-dq.ReadChan()
 	}
 
-
 	numFiles := dq.(*diskQueue).writeFileNum
 	dq.Empty()
 
@@ -170,7 +170,7 @@ func TestDiskQueueEmpty(t *testing.T) {
 	}
 
 	Equal(t, dq.(*diskQueue).writeFileNum, dq.(*diskQueue).readFileNum)
-	time.Sleep(3*time.Second)
+	time.Sleep(3 * time.Second)
 	Equal(t, dq.(*diskQueue).writePos, dq.(*diskQueue).readPos)
 	Equal(t, dq.(*diskQueue).readPos, dq.(*diskQueue).nextReadPos)
 }
@@ -265,7 +265,7 @@ func TestDiskQueueSyncAfterRead(t *testing.T) {
 
 	for i := 0; i < 10; i++ {
 		d := readMetaDataFile(dq.(*diskQueue).metaDataFileName(), 0)
-		if  d.readFileNum == 0 &&
+		if d.readFileNum == 0 &&
 			d.writeFileNum == 0 &&
 			d.readPos == 0 &&
 			d.writePos == 1004 {
@@ -282,7 +282,7 @@ next:
 
 	for i := 0; i < 10; i++ {
 		d := readMetaDataFile(dq.(*diskQueue).metaDataFileName(), 0)
-		if  d.readFileNum == 0 &&
+		if d.readFileNum == 0 &&
 			d.writeFileNum == 0 &&
 			d.readPos == 1004 &&
 			d.writePos == 2008 {

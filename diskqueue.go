@@ -50,7 +50,7 @@ type Interface interface {
 	ReadChan() <-chan []byte // this is expected to be an *unbuffered* channel
 	Close() error
 	// 判断是否已经读完当前队列里面的消息
-	JudgeNoMessage() bool
+	ReadEnd() bool
 	// 清空某个队列相关所有的相关信息
 	Empty() error
 	ResetReadMetaData() error
@@ -115,7 +115,8 @@ type diskQueue struct {
 	writeResponseChan chan error
 
 	// 是否还有消息要读
-	noMessage chan bool
+	noMessageLock sync.RWMutex
+	noMessage     chan bool
 
 	emptyChan         chan int
 	emptyResponseChan chan error
@@ -178,15 +179,21 @@ func (d *diskQueue) ReadChan() <-chan []byte {
 // Put writes a []byte to the queue
 // 想写通道中写数据，从写回应通道里面获取返回信号
 func (d *diskQueue) Put(data []byte) error {
-	d.RLock()
-	defer d.RUnlock()
+	d.Lock()
+	defer d.Unlock()
 
 	if d.exitFlag == 1 {
 		return errors.New("exiting")
 	}
 
 	d.writeChan <- data
-	return <-d.writeResponseChan
+	err := <-d.writeResponseChan
+	if err != nil {
+		return err
+	} else {
+		d.NoMessageSetFalse()
+		return nil
+	}
 }
 
 // Close cleans up the queue and persists metadata
@@ -244,10 +251,36 @@ func (d *diskQueue) Empty() error {
 	return <-d.emptyResponseChan
 }
 
-func (d *diskQueue) JudgeNoMessage() bool {
+func (d *diskQueue) NoMessageSetFalse() {
+	d.noMessageLock.Lock()
+	defer d.noMessageLock.Unlock()
+	// 不管有没有，都置为false
 	select {
 	case <-d.noMessage:
-		return true
+		d.noMessage <- false
+	default:
+		d.noMessage <- false
+	}
+}
+
+func (d *diskQueue) NoMessageSetTrue() {
+	d.noMessageLock.Lock()
+	defer d.noMessageLock.Unlock()
+	// 不管有没有，都置为true
+	select {
+	case <-d.noMessage:
+		d.noMessage <- true
+	default:
+		d.noMessage <- true
+	}
+}
+
+func (d *diskQueue) ReadEnd() bool {
+	d.noMessageLock.RLock()
+	defer d.noMessageLock.RUnlock()
+	select {
+	case ok := <-d.noMessage:
+		return ok
 	default:
 		return false
 	}
@@ -652,10 +685,8 @@ func (d *diskQueue) ioLoop() {
 			r = d.readChan
 		} else {
 			r = nil
-			select {
-			case d.noMessage <- true:
-			default:
-			}
+
+			d.NoMessageSetTrue()
 
 		}
 

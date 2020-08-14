@@ -107,11 +107,11 @@ type WALTimeRollQueue struct {
 	// 每次调用repair process 函数出错后的回退时间
 	backoffDuration time.Duration
 
-	exitChan chan bool
-	readExitChan chan bool
+	exitChan      chan bool
+	readExitChan  chan bool
 	writeExitChan chan bool
-	logf AppLogFunc
-	rpf  RepairProcessFunc
+	logf          AppLogFunc
+	rpf           RepairProcessFunc
 }
 
 // 排序从大到小
@@ -263,7 +263,7 @@ func (w *WALTimeRollQueue) Start() error {
 
 		for {
 			select {
-			case <- w.exitChan:
+			case <-w.exitChan:
 				close(w.readExitChan)
 				return
 			default:
@@ -274,11 +274,11 @@ func (w *WALTimeRollQueue) Start() error {
 					w.logf(INFO, "WALTimeRollQueue delete repair queues")
 					close(w.readExitChan)
 					return
-				}else {
+				} else {
 					if msgChan == nil {
 						continue
-					}else {
-						msg := <- msgChan
+					} else {
+						msg := <-msgChan
 						for {
 							ok := w.rpf(msg)
 							if !ok {
@@ -287,7 +287,7 @@ func (w *WALTimeRollQueue) Start() error {
 							}
 						}
 					}
-					
+
 				}
 			}
 		}
@@ -309,7 +309,7 @@ DO:
 	if w.activeRepairQueue == nil {
 		return nil, false
 	} else {
-		if w.activeRepairQueue.JudgeNoMessage() {
+		if w.activeRepairQueue.ReadEnd() {
 			// 切换下一个队列
 			w.activeRepairQueue.Close()
 			newRepairQueue := w.getNextRepairQueueName(w.activeRepairQueue.GetName())
@@ -337,7 +337,7 @@ func (w *WALTimeRollQueue) Close() {
 	// 发送退出信号
 	w.exitChan <- true
 	// 等待读退出
-	<- w.readExitChan
+	<-w.readExitChan
 	if w.activeRepairQueue != nil {
 		err := w.activeRepairQueue.Close()
 		if err != nil {
@@ -395,9 +395,9 @@ func NewTimeRollQueue(log AppLogFunc, options Options) WALTimeRollQueueI {
 		backoffDuration: options.BackoffDuration,
 		logf:            log,
 
-		exitChan: make(chan bool),
+		exitChan:      make(chan bool),
 		writeExitChan: make(chan bool),
-		readExitChan: make(chan bool),
+		readExitChan:  make(chan bool),
 	}
 
 }
