@@ -41,7 +41,7 @@ func TestRepairQueue(t *testing.T) {
 
 	l := NewTestLogger(t)
 	options := DefaultOption()
-	dirPrefix := fmt.Sprintf("TestGetAllRepairQueueNames-%d", time.Now().UnixNano())
+	dirPrefix := fmt.Sprintf("TestRepairQueue-%d", time.Now().UnixNano())
 	tmpDir, err := ioutil.TempDir("", dirPrefix)
 	if err != nil {
 		panic(err)
@@ -51,7 +51,7 @@ func TestRepairQueue(t *testing.T) {
 	}()
 
 	options.DataPath = tmpDir
-	options.Name = "TestGetAllRepairQueueNames"
+	options.Name = "TestRepairQueue"
 	options.MaxBytesPerFile = 32 * 1024
 	options.RollTimeSpan = 5
 
@@ -159,16 +159,68 @@ func TestRepairQueue(t *testing.T) {
 
 }
 
+func TestGetForezenQueuesTimeStamps(t *testing.T) {
+
+	l := NewTestLogger(t)
+	options := DefaultOption()
+	dirPrefix := fmt.Sprintf("TestGetForezenQueuesTimeStamps-%d", time.Now().UnixNano())
+	tmpDir, err := ioutil.TempDir("", dirPrefix)
+	if err != nil {
+		panic(err)
+	}
+	defer func() {
+		os.RemoveAll(tmpDir)
+	}()
+
+	options.DataPath = tmpDir
+	options.Name = "TestGetForezenQueuesTimeStamps"
+	options.MaxBytesPerFile = 32 * 1024
+	options.RollTimeSpan = 5
+
+	wal := NewTimeRollQueue(l, options)
+
+	err = wal.Start()
+	if err != nil {
+		t.Fatal("start err", err)
+	}
+
+	ticker := time.NewTicker(12 * time.Second)
+	exit := false
+	for !exit {
+		select {
+		case <-ticker.C:
+			exit = true
+		default:
+			err := wal.Put([]byte("a"))
+			if err != nil {
+				t.Fatal("Put error", err)
+			}
+		}
+	}
+
+	w, ok := wal.(*WALTimeRollQueue)
+	if !ok {
+		t.Fatal("WALTimeRollQueue type err")
+	}
+
+	ts := w.getForezenQueuesTimeStamps()
+
+	if len(ts) != 2 {
+		t.Log("ts len", len(ts))
+		t.Fatal("ts len err")
+	}
+
+	w.DeleteForezenBefore(time.Now().Unix())
+
+	ts = w.getForezenQueuesTimeStamps()
+
+	if len(ts) != 0 {
+		t.Fatal("ts len err 2")
+	}
+
+	wal.Close()
+}
+
 // 需要测试的函数
-// func (w *WALTimeRollQueue) getForezenQueuesTimeStamps() []int {
-// func (w *WALTimeRollQueue) resetQueue(name string) error {
-// func (w *WALTimeRollQueue) delteQueue(name string) error {
-// func (w *WALTimeRollQueue) GetNowActiveQueueName() string {
-// func (w *WALTimeRollQueue) GetNextRollTime() int64 {
-// func (w *WALTimeRollQueue) Roll() {
-// func (w *WALTimeRollQueue) Put(msg []byte) error {
 // func (w *WALTimeRollQueue) Start() error {
 // func (w *WALTimeRollQueue) ReadChan() (<-chan []byte, bool) {
-// func (w *WALTimeRollQueue) CloseWrite() error {
-// func (w *WALTimeRollQueue) Close() {
-// func (w *WALTimeRollQueue) DeleteForezenBefore(t int64) {

@@ -315,7 +315,7 @@ func (w *WALTimeRollQueue) Close() {
 	if w.activeQueue != nil {
 		err := w.activeQueue.Close()
 		if err != nil {
-			w.logf(ERROR, "WALTimeRollQueue CloseWrite %s", err)
+			w.logf(ERROR, "WALTimeRollQueue activeQueue Close %s", err)
 		}
 	}
 
@@ -323,14 +323,22 @@ func (w *WALTimeRollQueue) Close() {
 
 func (w *WALTimeRollQueue) DeleteForezenBefore(t int64) {
 	forezenTimes := w.getForezenQueuesTimeStamps()
+	restForezenQueue := []string{}
 	for _, time := range forezenTimes {
 		if time <= int(t) {
 			err := w.delteQueue(w.Name + "_" + strconv.Itoa(time))
 			if err != nil {
 				w.logf(ERROR, "WALTimeRollQueue DeleteForezenBefore delteQueue %s", err)
 			}
+		} else {
+			restForezenQueue = append(restForezenQueue, w.Name+"_"+strconv.Itoa(time))
 		}
 	}
+
+	w.Lock()
+	w.forezenQueues = restForezenQueue
+	w.Unlock()
+
 }
 
 func (w *WALTimeRollQueue) ResetRepairs() {
