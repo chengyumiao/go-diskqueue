@@ -5,6 +5,7 @@ import (
 	"io/ioutil"
 	"os"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -274,6 +275,7 @@ func TestBasicRead(t *testing.T) {
 
 }
 
+// 目前这个版本只支持并发写
 func TestConCurrencyWriteAndRead(t *testing.T) {
 	l := NewTestLogger(t)
 	options := DefaultOption()
@@ -296,10 +298,10 @@ func TestConCurrencyWriteAndRead(t *testing.T) {
 
 	wg := sync.WaitGroup{}
 
-	for j := 0; j < 10; j++ {
+	for j := 0; j < 2; j++ {
 		wg.Add(1)
 		go func() {
-			for i := 0; i < 100; i++ {
+			for i := 0; i < 100000; i++ {
 				err := wal.Put([]byte("a"))
 				if err != nil {
 					t.Fatal("Put error", err)
@@ -330,6 +332,78 @@ func TestConCurrencyWriteAndRead(t *testing.T) {
 			break
 		}
 	}
+
+	if count != 200000 {
+		t.Fatal("read count not equal write count", "read count", count)
+	}
+	wal2.Close()
+}
+
+// 支持并发读写
+func TestConCurrencyWriteAndCurrencyRead(t *testing.T) {
+	l := NewTestLogger(t)
+	options := DefaultOption()
+
+	tmpDir, err := ioutil.TempDir("", fmt.Sprintf("TestConCurrencyWriteAndRead-%d", time.Now().UnixNano()))
+	if err != nil {
+		panic(err)
+	}
+
+	defer os.RemoveAll(tmpDir)
+	options.DataPath = tmpDir
+	options.Name = "TestConCurrencyWriteAndRead"
+
+	wal := NewTimeRollQueue(l, options)
+
+	err = wal.Start()
+	if err != nil {
+		t.Fatal("start err", err)
+	}
+
+	wg := sync.WaitGroup{}
+
+	for j := 0; j < 1; j++ {
+		wg.Add(1)
+		go func() {
+			for i := 0; i < 1000; i++ {
+				err := wal.Put([]byte("a"))
+				if err != nil {
+					t.Fatal("Put error", err)
+				}
+			}
+			wg.Done()
+		}()
+	}
+
+	wg.Wait()
+
+	wal.Close()
+
+	wal2I := NewTimeRollQueue(l, options)
+	wal2I.Start()
+	count := int32(0)
+
+	wal2, _ := wal2I.(*WALTimeRollQueue)
+
+	for j := 0; j < 5; j++ {
+		wg.Add(1)
+		go func() {
+			for {
+				msgBytes, ok := wal2.ReadMsg()
+				if ok {
+					atomic.AddInt32(&count, 1)
+					if string(msgBytes) != "a" {
+						t.Fatal("not equal a")
+					}
+				} else {
+					break
+				}
+			}
+			wg.Done()
+		}()
+	}
+
+	wg.Wait()
 
 	if count != 1000 {
 		t.Fatal("read count not equal write count", "read count", count)

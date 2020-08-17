@@ -281,11 +281,20 @@ func (d *diskQueue) NoMessageSetTrue() {
 	}
 }
 
+// 如果没有消息，那么取出来要将没有消息的信息继续放进通道
 func (d *diskQueue) ReadEnd() bool {
 	d.noMessageLock.RLock()
 	defer d.noMessageLock.RUnlock()
 	select {
 	case ok := <-d.noMessage:
+		if ok {
+			select {
+			case d.noMessage <- ok:
+				return ok
+			default:
+				return ok
+			}
+		}
 		return ok
 	default:
 		return false
