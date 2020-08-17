@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
+	"sync"
 	"testing"
 	"time"
 )
@@ -53,7 +54,7 @@ func TestRepairQueue(t *testing.T) {
 	options.DataPath = tmpDir
 	options.Name = "TestRepairQueue"
 	options.MaxBytesPerFile = 32 * 1024
-	options.RollTimeSpan = 5
+	options.RollTimeSpanSecond = 5
 
 	wal := NewTimeRollQueue(l, options)
 
@@ -87,7 +88,7 @@ func TestRepairQueue(t *testing.T) {
 		maxMsgSize:      options.MaxMsgSize,
 		syncEvery:       options.SyncEvery,
 		syncTimeout:     options.SyncTimeout,
-		rollTimeSpan:    options.RollTimeSpan,
+		rollTimeSpan:    time.Duration(options.RollTimeSpanSecond) * time.Second,
 		backoffDuration: options.BackoffDuration,
 		logf:            l,
 	}
@@ -175,7 +176,7 @@ func TestGetForezenQueuesTimeStamps(t *testing.T) {
 	options.DataPath = tmpDir
 	options.Name = "TestGetForezenQueuesTimeStamps"
 	options.MaxBytesPerFile = 32 * 1024
-	options.RollTimeSpan = 5
+	options.RollTimeSpanSecond = 5
 
 	wal := NewTimeRollQueue(l, options)
 
@@ -205,12 +206,12 @@ func TestGetForezenQueuesTimeStamps(t *testing.T) {
 
 	ts := w.getForezenQueuesTimeStamps()
 
-	if len(ts) != 2 {
+	if len(ts) != 2 && len(ts) != 3 {
 		t.Log("ts len", len(ts))
 		t.Fatal("ts len err")
 	}
 
-	w.DeleteForezenBefore(time.Now().Unix())
+	w.DeleteForezenBefore(time.Now().UnixNano())
 
 	ts = w.getForezenQueuesTimeStamps()
 
@@ -221,6 +222,117 @@ func TestGetForezenQueuesTimeStamps(t *testing.T) {
 	wal.Close()
 }
 
-// 需要测试的函数
-// func (w *WALTimeRollQueue) Start() error {
-// func (w *WALTimeRollQueue) ReadChan() (<-chan []byte, bool) {
+func TestBasicRead(t *testing.T) {
+	l := NewTestLogger(t)
+	options := DefaultOption()
+
+	tmpDir, err := ioutil.TempDir("", fmt.Sprintf("TestBasicRead-%d", time.Now().UnixNano()))
+	if err != nil {
+		panic(err)
+	}
+
+	defer os.RemoveAll(tmpDir)
+	options.DataPath = tmpDir
+	options.Name = "TestBasicRead"
+
+	wal := NewTimeRollQueue(l, options)
+
+	err = wal.Start()
+	if err != nil {
+		t.Fatal("start err", err)
+	}
+
+	for i := 0; i < 10; i++ {
+		err := wal.Put([]byte("a"))
+		if err != nil {
+			t.Fatal("Put error", err)
+		}
+	}
+	wal.Close()
+
+	wal2 := NewTimeRollQueue(l, options)
+
+	err = wal2.Start()
+	if err != nil {
+		t.Fatal("start err", err)
+	}
+
+	count := 0
+
+	for {
+		msg, ok := wal2.readChan()
+		if !ok {
+			break
+		}
+		count++
+		_ = <-msg
+	}
+
+	if count != 10 {
+		t.Fatal("read count not equal write count")
+	}
+
+}
+
+func TestConCurrencyWriteAndRead(t *testing.T) {
+	l := NewTestLogger(t)
+	options := DefaultOption()
+
+	tmpDir, err := ioutil.TempDir("", fmt.Sprintf("TestConCurrencyWriteAndRead-%d", time.Now().UnixNano()))
+	if err != nil {
+		panic(err)
+	}
+
+	defer os.RemoveAll(tmpDir)
+	options.DataPath = tmpDir
+	options.Name = "TestConCurrencyWriteAndRead"
+
+	wal := NewTimeRollQueue(l, options)
+
+	err = wal.Start()
+	if err != nil {
+		t.Fatal("start err", err)
+	}
+
+	wg := sync.WaitGroup{}
+
+	for j := 0; j < 10; j++ {
+		wg.Add(1)
+		go func() {
+			for i := 0; i < 100; i++ {
+				err := wal.Put([]byte("a"))
+				if err != nil {
+					t.Fatal("Put error", err)
+				}
+			}
+			wg.Done()
+		}()
+	}
+
+	wg.Wait()
+
+	wal.Close()
+
+	wal2I := NewTimeRollQueue(l, options)
+	wal2I.Start()
+	count := 0
+
+	wal2, _ := wal2I.(*WALTimeRollQueue)
+
+	for {
+		msgBytes, ok := wal2.ReadMsg()
+		if ok {
+			count++
+			if string(msgBytes) != "a" {
+				t.Fatal("not equal a")
+			}
+		} else {
+			break
+		}
+	}
+
+	if count != 1000 {
+		t.Fatal("read count not equal write count", "read count", count)
+	}
+	wal2.Close()
+}

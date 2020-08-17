@@ -11,6 +11,7 @@ import (
 	"os"
 	"path"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -84,7 +85,8 @@ type diskQueue struct {
 	// 每多少次写同步一次
 	syncEvery int64 // number of writes per fsync
 	// 最迟的同步时间，如果一段时间没有同步，则开启同步
-	syncTimeout time.Duration // duration of time per fsync
+	noMessageSyncCount uint
+	syncTimeout        time.Duration // duration of time per fsync
 	// 退出标识位
 	exitFlag int32
 	// 是否需要同步
@@ -212,11 +214,11 @@ func (d *diskQueue) exit() error {
 	d.Lock()
 	defer d.Unlock()
 
-	if d.exitFlag == 1 {
-		return errors.New("diskQueue is exiting ...")
+	bool := atomic.CompareAndSwapInt32(&d.exitFlag, 0, 1)
+	if !bool {
+		return errors.New("now is exiting")
 	}
 
-	d.exitFlag = 1
 	// 关闭退出通道
 	close(d.exitChan)
 	// ensure that ioLoop has exited

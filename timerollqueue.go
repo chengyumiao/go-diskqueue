@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -17,45 +18,45 @@ func __init__() {
 }
 
 const (
-	DefaultName            = "timerollqueue"
-	DefaultDataPath        = "."
-	DefaultMaxBytesPerFile = 100 * 1024 * 1024
-	DefaultMinMsgSize      = 0
-	DefaultMaxMsgSize      = 4 * 1024 * 1024
-	DefaultSyncEvery       = 5000
-	DefaultSyncTimeout     = 2 * time.Second
-	DefaultRollTimeSpan    = 2 * 3600
-	DefaultBackoffDuration = 100 * time.Millisecond
-	DefaultLimiterDuration = 20 * time.Microsecond
+	DefaultName               = "timerollqueue"
+	DefaultDataPath           = "."
+	DefaultMaxBytesPerFile    = 100 * 1024 * 1024
+	DefaultMinMsgSize         = 0
+	DefaultMaxMsgSize         = 4 * 1024 * 1024
+	DefaultSyncEvery          = 500
+	DefaultSyncTimeout        = 2 * time.Second
+	DefaultRollTimeSpanSecond = 2 * 3600
+	DefaultBackoffDuration    = 100 * time.Millisecond
+	DefaultLimiterDuration    = 20 * time.Microsecond
 	L
 	QueueMetaSuffix = ".diskqueue.meta.dat"
 )
 
 type Options struct {
-	Name            string        `json:"WALTimeRollQueue.Name"`
-	DataPath        string        `json:"WALTimeRollQueue.DataPath"`
-	MaxBytesPerFile int64         `json:"WALTimeRollQueue.MaxBytesPerFile"`
-	MinMsgSize      int32         `json:"WALTimeRollQueue.MinMsgSize"`
-	MaxMsgSize      int32         `json:"WALTimeRollQueue.MaxMsgSize"`
-	SyncEvery       int64         `json:"WALTimeRollQueue.SyncEvery"`
-	SyncTimeout     time.Duration `json:"WALTimeRollQueue.SyncTimeout"`
-	RollTimeSpan    int64         `json:"WALTimeRollQueue.RollTimeSpan"`
-	BackoffDuration time.Duration `json:"WALTimeRollQueue.BackoffDuration"`
-	LimiterDuration time.Duration `json:"WALTimeRollQueue.LimiterDuration"`
+	Name               string        `json:"WALTimeRollQueue.Name"`
+	DataPath           string        `json:"WALTimeRollQueue.DataPath"`
+	MaxBytesPerFile    int64         `json:"WALTimeRollQueue.MaxBytesPerFile"`
+	MinMsgSize         int32         `json:"WALTimeRollQueue.MinMsgSize"`
+	MaxMsgSize         int32         `json:"WALTimeRollQueue.MaxMsgSize"`
+	SyncEvery          int64         `json:"WALTimeRollQueue.SyncEvery"`
+	SyncTimeout        time.Duration `json:"WALTimeRollQueue.SyncTimeout"`
+	RollTimeSpanSecond int64         `json:"WALTimeRollQueue.RollTimeSpanSecond"` // 配置单位为s
+	BackoffDuration    time.Duration `json:"WALTimeRollQueue.BackoffDuration"`
+	LimiterDuration    time.Duration `json:"WALTimeRollQueue.LimiterDuration"`
 }
 
 func DefaultOption() *Options {
 	return &Options{
-		Name:            DefaultName,
-		DataPath:        DefaultDataPath,
-		MaxBytesPerFile: DefaultMaxBytesPerFile,
-		MinMsgSize:      DefaultMinMsgSize,
-		MaxMsgSize:      DefaultMaxMsgSize,
-		SyncEvery:       DefaultSyncEvery,
-		SyncTimeout:     DefaultSyncTimeout,
-		RollTimeSpan:    DefaultRollTimeSpan,
-		BackoffDuration: DefaultBackoffDuration,
-		LimiterDuration: DefaultLimiterDuration,
+		Name:               DefaultName,
+		DataPath:           DefaultDataPath,
+		MaxBytesPerFile:    DefaultMaxBytesPerFile,
+		MinMsgSize:         DefaultMinMsgSize,
+		MaxMsgSize:         DefaultMaxMsgSize,
+		SyncEvery:          DefaultSyncEvery,
+		SyncTimeout:        DefaultSyncTimeout,
+		RollTimeSpanSecond: DefaultRollTimeSpanSecond,
+		BackoffDuration:    DefaultBackoffDuration,
+		LimiterDuration:    DefaultLimiterDuration,
 	}
 }
 
@@ -104,7 +105,7 @@ type WALTimeRollQueue struct {
 	// 最迟的同步时间，如果一段时间没有同步，则开启同步
 	syncTimeout time.Duration // duration of time per fsync
 	// 滚动的时间间隔，单位为s
-	rollTimeSpan int64
+	rollTimeSpan time.Duration
 	// 下次切换的时间点
 	nextRollTime int64
 	// 每次调用repair process 函数出错后的回退时间
@@ -113,7 +114,7 @@ type WALTimeRollQueue struct {
 	limiterDuration time.Duration
 
 	finishFlag bool
-	exitFlag   bool
+	exitFlag   uint32
 
 	logf AppLogFunc
 	rpf  RepairProcessFunc
@@ -157,15 +158,15 @@ func (w *WALTimeRollQueue) getNextRepairQueueName(name string) string {
 	return ""
 }
 
-func (w *WALTimeRollQueue) getForezenQueuesTimeStamps() []int {
-	times := []int{}
+func (w *WALTimeRollQueue) getForezenQueuesTimeStamps() []int64 {
+	times := []int64{}
 	forezenQueues := []string{}
 	w.RLock()
 	forezenQueues = append(forezenQueues, w.forezenQueues...)
 	w.RUnlock()
 	for _, name := range forezenQueues {
 		t := strings.TrimPrefix(name, w.Name+"_")
-		time, err := strconv.Atoi(t)
+		time, err := strconv.ParseInt(t, 10, 64)
 		if err != nil {
 			w.logf(ERROR, "WALTimeRollQueue getForezenQueuesTimeStamps strconv.Atoi %s", err)
 		} else {
@@ -192,11 +193,11 @@ func (w *WALTimeRollQueue) delteQueue(name string) error {
 }
 
 func (w *WALTimeRollQueue) GetNowActiveQueueName() string {
-	return w.Name + "_" + strconv.Itoa(int(time.Now().Unix()/w.rollTimeSpan*w.rollTimeSpan))
+	return w.Name + "_" + strconv.FormatInt(time.Now().UnixNano()/int64(w.rollTimeSpan)*int64(w.rollTimeSpan), 10)
 }
 
 func (w *WALTimeRollQueue) GetNextRollTime() int64 {
-	return time.Now().Unix()/w.rollTimeSpan*w.rollTimeSpan + w.rollTimeSpan
+	return time.Now().UnixNano()/int64(w.rollTimeSpan)*int64(w.rollTimeSpan) + int64(w.rollTimeSpan)
 }
 
 // 并发安全的，多个进程同时发起Roll，那么只有一个会成功
@@ -205,7 +206,7 @@ func (w *WALTimeRollQueue) Roll() {
 	w.Lock()
 	defer w.Unlock()
 
-	if w.exitFlag {
+	if w.exitFlag > 0 {
 		return
 	}
 
@@ -227,11 +228,11 @@ func (w *WALTimeRollQueue) Roll() {
 
 func (w *WALTimeRollQueue) Put(msg []byte) error {
 
-	if w.exitFlag {
+	if w.exitFlag > 0 {
 		return errors.New("WALTimeRollQueue exit Flag is true")
 	}
 
-	if time.Now().Unix() > w.nextRollTime {
+	if time.Now().UnixNano() > w.nextRollTime {
 		// 随机睡眠一下，防止大家共同进入加锁
 		time.Sleep(time.Microsecond * time.Duration(rand.Intn(500)))
 		w.Roll()
@@ -245,7 +246,7 @@ func (w *WALTimeRollQueue) repair() {
 	// 开启一个读go程去从repair队列中将读出来，等待上层取走，一旦读通道空出来则开始读，第一次读的时候去返回一个空的消息
 	for {
 		// 如果发现退出标志为真，那么直接退出
-		if w.exitFlag {
+		if w.exitFlag > 0 {
 			return
 		}
 
@@ -287,17 +288,39 @@ func (w *WALTimeRollQueue) Start() error {
 	return nil
 }
 
+func (w *WALTimeRollQueue) ReadChan() (<-chan []byte, bool) {
+	return w.readChan()
+}
+
+func (w *WALTimeRollQueue) ReadMsg() ([]byte, bool) {
+
+	for {
+		msg, ok := w.readChan()
+		if !ok {
+			return nil, false
+		}
+		ticker := time.NewTicker(100 * time.Millisecond)
+		select {
+		case msgBytes := <-msg:
+			return msgBytes, true
+		case <-ticker.C:
+			continue
+		}
+	}
+
+}
+
 func (w *WALTimeRollQueue) readChan() (<-chan []byte, bool) {
 
-	if w.exitFlag {
-		return nil, true
+	if w.exitFlag > 0 {
+		return nil, false
 	}
 
 	if w.activeRepairQueue == nil {
 		return nil, false
 	} else {
 		if w.activeRepairQueue.ReadEnd() {
-			// 切换下一个队列
+			// 切换下一个队列，这里主动关闭了一次
 			w.activeRepairQueue.Close()
 			newRepairQueue := w.getNextRepairQueueName(w.activeRepairQueue.GetName())
 			if newRepairQueue == "" {
@@ -315,6 +338,10 @@ func (w *WALTimeRollQueue) readChan() (<-chan []byte, bool) {
 func (w *WALTimeRollQueue) Close() {
 	w.Lock()
 	defer w.Unlock()
+
+	if !atomic.CompareAndSwapUint32(&w.exitFlag, 0, 1) {
+		return
+	}
 
 	if w.activeRepairQueue != nil {
 		err := w.activeRepairQueue.Close()
@@ -336,13 +363,13 @@ func (w *WALTimeRollQueue) DeleteForezenBefore(t int64) {
 	forezenTimes := w.getForezenQueuesTimeStamps()
 	restForezenQueue := []string{}
 	for _, time := range forezenTimes {
-		if time <= int(t) {
-			err := w.delteQueue(w.Name + "_" + strconv.Itoa(time))
+		if time <= t {
+			err := w.delteQueue(w.Name + "_" + strconv.FormatInt(time, 10))
 			if err != nil {
 				w.logf(ERROR, "WALTimeRollQueue DeleteForezenBefore delteQueue %s", err)
 			}
 		} else {
-			restForezenQueue = append(restForezenQueue, w.Name+"_"+strconv.Itoa(time))
+			restForezenQueue = append(restForezenQueue, w.Name+"_"+strconv.FormatInt(time, 10))
 		}
 	}
 
@@ -380,7 +407,7 @@ func NewTimeRollQueue(log AppLogFunc, options *Options) WALTimeRollQueueI {
 		maxMsgSize:      options.MaxMsgSize,
 		syncEvery:       options.SyncEvery,
 		syncTimeout:     options.SyncTimeout,
-		rollTimeSpan:    options.RollTimeSpan,
+		rollTimeSpan:    time.Duration(options.RollTimeSpanSecond) * time.Second,
 		backoffDuration: options.BackoffDuration,
 		logf:            log,
 	}
@@ -389,7 +416,7 @@ func NewTimeRollQueue(log AppLogFunc, options *Options) WALTimeRollQueueI {
 
 func (w *WALTimeRollQueue) init() error {
 	// 每次启动的时候用当前最新时间
-	w.activeQueue = New(w.Name+"_"+strconv.Itoa(int(time.Now().Unix())), w.dataPath, w.maxBytesPerFile, w.minMsgSize, w.maxMsgSize, w.syncEvery, w.syncTimeout, w.logf)
+	w.activeQueue = New(w.Name+"_"+strconv.FormatInt(time.Now().UnixNano(), 10), w.dataPath, w.maxBytesPerFile, w.minMsgSize, w.maxMsgSize, w.syncEvery, w.syncTimeout, w.logf)
 	w.nextRollTime = w.GetNextRollTime()
 	w.forezenQueues = []string{}
 	var err error
