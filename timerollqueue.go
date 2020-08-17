@@ -71,6 +71,7 @@ type WALTimeRollQueueI interface {
 	// 读取消息，只会从repair队列中读取消息，不会去读取当前队列的消息
 	// 不停地读消息，如果能读到则返回ok，否则返回false
 	readChan() (<-chan []byte, bool) // this is expected to be an *unbuffered* channel
+	ReadMsg() ([]byte, bool)
 	// 关闭：关闭activeQueue并且同步磁盘
 	Close()
 	// 删除某个时间戳之前的冷冻队列
@@ -288,10 +289,12 @@ func (w *WALTimeRollQueue) Start() error {
 	return nil
 }
 
+// 阻塞型读取，关闭队列关闭，不适合无写入的情况，写入退出后，一定要关闭队列，这样读收到信号也会立马退出。
 func (w *WALTimeRollQueue) ReadChan() (<-chan []byte, bool) {
 	return w.readChan()
 }
 
+// 读取数据直到队列里面没有数据，不管队列有没有关闭，如果所有的数据都被读完也会退出。
 func (w *WALTimeRollQueue) ReadMsg() ([]byte, bool) {
 
 	for {
