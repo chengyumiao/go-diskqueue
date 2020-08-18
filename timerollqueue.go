@@ -70,7 +70,9 @@ type WALTimeRollQueueI interface {
 	Start() error
 	// 读取消息，只会从repair队列中读取消息，不会去读取当前队列的消息
 	// 不停地读消息，如果能读到则返回ok，否则返回false
-	readChan() (<-chan []byte, bool) // this is expected to be an *unbuffered* channel
+	ReadChan() <-chan []byte // this is expected to be an *unbuffered* channel
+
+	// 单线程安全
 	ReadMsg() ([]byte, bool)
 	// 关闭：关闭activeQueue并且同步磁盘
 	Close()
@@ -119,6 +121,8 @@ type WALTimeRollQueue struct {
 
 	logf AppLogFunc
 	rpf  RepairProcessFunc
+
+	msgChan chan []byte
 }
 
 // 排序从大到小
@@ -290,11 +294,12 @@ func (w *WALTimeRollQueue) Start() error {
 }
 
 // 阻塞型读取，关闭队列关闭，不适合无写入的情况，写入退出后，一定要关闭队列，这样读收到信号也会立马退出。
-func (w *WALTimeRollQueue) ReadChan() (<-chan []byte, bool) {
-	return w.readChan()
+func (w *WALTimeRollQueue) ReadChan() <-chan []byte {
+	return w.msgChan
 }
 
 // 读取数据直到队列里面没有数据，不管队列有没有关闭，如果所有的数据都被读完也会退出。
+// 非线程安全，单个线程安全
 func (w *WALTimeRollQueue) ReadMsg() ([]byte, bool) {
 
 	for {
@@ -323,7 +328,7 @@ func (w *WALTimeRollQueue) readChan() (<-chan []byte, bool) {
 		return nil, false
 	} else {
 		if w.activeRepairQueue.ReadEnd() {
-			// 切换下一个队列，这里主动关闭了一次
+			// 切换下一个队列，这里主动关闭了一次，切换
 			w.activeRepairQueue.Close()
 			newRepairQueue := w.getNextRepairQueueName(w.activeRepairQueue.GetName())
 			if newRepairQueue == "" {
@@ -334,6 +339,42 @@ func (w *WALTimeRollQueue) readChan() (<-chan []byte, bool) {
 		}
 
 		return w.activeRepairQueue.ReadChan(), true
+	}
+
+}
+
+func (w *WALTimeRollQueue) startReadChan() {
+
+	for {
+		if w.exitFlag > 0 {
+			close(w.msgChan)
+			return
+		}
+
+		if w.activeRepairQueue == nil {
+			close(w.msgChan)
+			return
+		} else {
+			if w.activeRepairQueue.ReadEnd() {
+				// 切换下一个队列，这里主动关闭了一次，切换
+				w.activeRepairQueue.Close()
+				newRepairQueue := w.getNextRepairQueueName(w.activeRepairQueue.GetName())
+				if newRepairQueue == "" {
+					close(w.msgChan)
+				}
+				w.activeRepairQueue = New(newRepairQueue, w.dataPath, w.maxBytesPerFile, w.minMsgSize, w.maxMsgSize, w.syncEvery, w.syncTimeout, w.logf)
+			}
+
+			msgChan := w.activeRepairQueue.ReadChan()
+			ticker := time.NewTicker(100 * time.Millisecond)
+			select {
+			case msg := <-msgChan:
+				if msg != nil {
+					w.msgChan <- msg
+				}
+			case <-ticker.C:
+			}
+		}
 	}
 
 }
@@ -413,6 +454,7 @@ func NewTimeRollQueue(log AppLogFunc, options *Options) WALTimeRollQueueI {
 		rollTimeSpan:    time.Duration(options.RollTimeSpanSecond) * time.Second,
 		backoffDuration: options.BackoffDuration,
 		logf:            log,
+		msgChan:         make(chan []byte),
 	}
 
 }

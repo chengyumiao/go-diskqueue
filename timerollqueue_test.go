@@ -3,6 +3,9 @@ package diskqueue
 import (
 	"fmt"
 	"io/ioutil"
+	"log"
+	"math/rand"
+	"net/http"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -251,12 +254,14 @@ func TestBasicRead(t *testing.T) {
 	}
 	wal.Close()
 
-	wal2 := NewTimeRollQueue(l, options)
+	wal2I := NewTimeRollQueue(l, options)
 
-	err = wal2.Start()
+	err = wal2I.Start()
 	if err != nil {
 		t.Fatal("start err", err)
 	}
+
+	wal2, _ := wal2I.(*WALTimeRollQueue)
 
 	count := 0
 
@@ -341,17 +346,23 @@ func TestConCurrencyWriteAndRead(t *testing.T) {
 
 // 支持并发读写
 func TestConCurrencyWriteAndCurrencyRead(t *testing.T) {
+
+	go func() {
+		log.Println(http.ListenAndServe(":6060", nil))
+	}()
+
 	l := NewTestLogger(t)
 	options := DefaultOption()
 
-	tmpDir, err := ioutil.TempDir("", fmt.Sprintf("TestConCurrencyWriteAndRead-%d", time.Now().UnixNano()))
+	tmpDir, err := ioutil.TempDir("", fmt.Sprintf("TestConCurrencyWriteAndCurrencyRead-%d", time.Now().UnixNano()))
 	if err != nil {
 		panic(err)
 	}
 
 	defer os.RemoveAll(tmpDir)
 	options.DataPath = tmpDir
-	options.Name = "TestConCurrencyWriteAndRead"
+	options.RollTimeSpanSecond = 1
+	options.Name = "TestConCurrencyWriteAndCurrencyRead"
 
 	wal := NewTimeRollQueue(l, options)
 
@@ -362,7 +373,7 @@ func TestConCurrencyWriteAndCurrencyRead(t *testing.T) {
 
 	wg := sync.WaitGroup{}
 
-	for j := 0; j < 1; j++ {
+	for j := 0; j < 20; j++ {
 		wg.Add(1)
 		go func() {
 			for i := 0; i < 1000; i++ {
@@ -370,6 +381,8 @@ func TestConCurrencyWriteAndCurrencyRead(t *testing.T) {
 				if err != nil {
 					t.Fatal("Put error", err)
 				}
+
+				time.Sleep(time.Duration(rand.Intn(10)) * time.Millisecond)
 			}
 			wg.Done()
 		}()
@@ -384,28 +397,45 @@ func TestConCurrencyWriteAndCurrencyRead(t *testing.T) {
 	count := int32(0)
 
 	wal2, _ := wal2I.(*WALTimeRollQueue)
+	// wal2.startReadChan()
 
-	for j := 0; j < 5; j++ {
-		wg.Add(1)
-		go func() {
-			for {
-				msgBytes, ok := wal2.ReadMsg()
-				if ok {
-					atomic.AddInt32(&count, 1)
-					if string(msgBytes) != "a" {
-						t.Fatal("not equal a")
-					}
-				} else {
-					break
-				}
+	// for j := 0; j < 5; j++ {
+	// 	wg.Add(1)
+	// 	go func() {
+	// 		msgChan := wal2.ReadChan()
+
+	// 		for {
+
+	// 			msg, ok := <-msgChan
+
+	// 			if !ok {
+	// 				break
+	// 			} else {
+	// 				if string(msg) == "a" {
+	// 					atomic.AddInt32(&count, 1)
+	// 				}
+	// 			}
+	// 		}
+
+	// 		wg.Done()
+	// 	}()
+	// }
+
+	for {
+		msgBytes, ok := wal2.ReadMsg()
+		if ok {
+			atomic.AddInt32(&count, 1)
+			if string(msgBytes) != "a" {
+				t.Fatal("not equal a")
 			}
-			wg.Done()
-		}()
+		} else {
+			break
+		}
 	}
 
-	wg.Wait()
+	// wg.Wait()
 
-	if count != 1000 {
+	if count != 20000 {
 		t.Fatal("read count not equal write count", "read count", count)
 	}
 	wal2.Close()
