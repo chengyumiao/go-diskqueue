@@ -372,3 +372,89 @@ func TestDiskQueueTorture(t *testing.T) {
 	close(readExitChan)
 	wg.Wait()
 }
+
+func TestDiskQueueWriteAndRead(t *testing.T) {
+	l := NewTestLogger(t)
+
+	dqName := "TestDiskQueueWriteAndRead" + strconv.Itoa(int(time.Now().Unix()))
+	tmpDir, err := ioutil.TempDir("", fmt.Sprintf("TestDiskQueueWriteAndRead-%d", time.Now().UnixNano()))
+	if err != nil {
+		panic(err)
+	}
+	defer os.RemoveAll(tmpDir)
+	dq := New(dqName, tmpDir, 1024, 4, 1<<10, 2500, 2*time.Second, l)
+	defer dq.Close()
+	NotNil(t, dq)
+
+	msg := []byte("test")
+
+	for i := 0; i < 1000; i++ {
+		err = dq.Put(msg)
+		Nil(t, err)
+	}
+
+	count := 0
+
+	for {
+		msgOut, ok := dq.ReadNoBlock()
+		if !ok {
+			break
+		} else {
+			Equal(t, msg, msgOut)
+			count++
+		}
+	}
+
+	if count != 1000 {
+		t.Fatal("len err")
+	}
+
+}
+
+func TestDiskQueueWriteAndConcurrencyRead(t *testing.T) {
+	l := NewTestLogger(t)
+
+	dqName := "TestDiskQueueWriteAndConcurrencyRead" + strconv.Itoa(int(time.Now().Unix()))
+	tmpDir, err := ioutil.TempDir("", fmt.Sprintf("TestDiskQueueWriteAndConcurrencyRead-%d", time.Now().UnixNano()))
+	if err != nil {
+		panic(err)
+	}
+	defer os.RemoveAll(tmpDir)
+	dq := New(dqName, tmpDir, 1024, 4, 1<<10, 2500, 2*time.Second, l)
+	defer dq.Close()
+	NotNil(t, dq)
+
+	msg := []byte("test")
+
+	for i := 0; i < 100000; i++ {
+		err = dq.Put(msg)
+		Nil(t, err)
+	}
+
+	count := int32(0)
+
+	wg := sync.WaitGroup{}
+
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func() {
+			for {
+				msgOut, ok := dq.ReadNoBlock()
+				if !ok {
+					break
+				} else {
+					Equal(t, msg, msgOut)
+					atomic.AddInt32(&count, 1)
+				}
+			}
+			wg.Done()
+		}()
+	}
+
+	wg.Wait()
+
+	if count != 100000 {
+		t.Fatal("len err")
+	}
+
+}

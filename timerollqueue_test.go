@@ -361,6 +361,7 @@ func TestConCurrencyWriteAndCurrencyRead(t *testing.T) {
 
 	defer os.RemoveAll(tmpDir)
 	options.DataPath = tmpDir
+	options.SyncTimeout = time.Millisecond
 	options.RollTimeSpanSecond = 1
 	options.Name = "TestConCurrencyWriteAndCurrencyRead"
 
@@ -397,43 +398,44 @@ func TestConCurrencyWriteAndCurrencyRead(t *testing.T) {
 	count := int32(0)
 
 	wal2, _ := wal2I.(*WALTimeRollQueue)
-	// wal2.startReadChan()
 
-	// for j := 0; j < 5; j++ {
-	// 	wg.Add(1)
-	// 	go func() {
-	// 		msgChan := wal2.ReadChan()
+	wal2.startReadChan()
 
-	// 		for {
+	for j := 0; j < 5; j++ {
+		wg.Add(1)
+		go func() {
+			msgChan := wal2.ReadChan()
 
-	// 			msg, ok := <-msgChan
+			for {
 
-	// 			if !ok {
-	// 				break
-	// 			} else {
-	// 				if string(msg) == "a" {
-	// 					atomic.AddInt32(&count, 1)
-	// 				}
-	// 			}
-	// 		}
+				msg, ok := <-msgChan
 
-	// 		wg.Done()
-	// 	}()
-	// }
-
-	for {
-		msgBytes, ok := wal2.ReadMsg()
-		if ok {
-			atomic.AddInt32(&count, 1)
-			if string(msgBytes) != "a" {
-				t.Fatal("not equal a")
+				if !ok {
+					break
+				} else {
+					if string(msg) == "a" {
+						atomic.AddInt32(&count, 1)
+					}
+				}
 			}
-		} else {
-			break
-		}
+
+			wg.Done()
+		}()
 	}
 
-	// wg.Wait()
+	wg.Wait()
+
+	// for {
+	// 	msgBytes, ok := wal2.ReadMsg()
+	// 	if ok {
+	// 		atomic.AddInt32(&count, 1)
+	// 		if string(msgBytes) != "a" {
+	// 			t.Fatal("not equal a")
+	// 		}
+	// 	} else {
+	// 		break
+	// 	}
+	// }
 
 	if count != 20000 {
 		t.Fatal("read count not equal write count", "read count", count)

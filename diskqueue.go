@@ -48,7 +48,10 @@ func (l LogLevel) String() string {
 type Interface interface {
 	GetName() string
 	Put([]byte) error
+	// 这个是阻塞的读
 	ReadChan() <-chan []byte // this is expected to be an *unbuffered* channel
+	// 提供非阻塞读
+	ReadNoBlock() ([]byte, bool)
 	Close() error
 	// 判断是否已经读完当前队列里面的消息
 	ReadEnd() bool
@@ -84,9 +87,8 @@ type diskQueue struct {
 	maxMsgSize int32
 	// 每多少次写同步一次
 	syncEvery int64 // number of writes per fsync
-	// 最迟的同步时间，如果一段时间没有同步，则开启同步
-	noMessageSyncCount uint
-	syncTimeout        time.Duration // duration of time per fsync
+
+	syncTimeout time.Duration // duration of time per fsync
 	// 退出标识位
 	exitFlag int32
 	// 是否需要同步
@@ -117,8 +119,7 @@ type diskQueue struct {
 	writeResponseChan chan error
 
 	// 是否还有消息要读
-	noMessageLock sync.RWMutex
-	noMessage     chan bool
+	noMessage int32
 
 	emptyChan         chan int
 	emptyResponseChan chan error
@@ -150,7 +151,6 @@ func New(name string, dataPath string, maxBytesPerFile int64,
 		emptyResponseChan: make(chan error),
 		exitChan:          make(chan int),
 		exitSyncChan:      make(chan int),
-		noMessage:         make(chan bool, 1),
 		syncEvery:         syncEvery,
 		syncTimeout:       syncTimeout,
 		logf:              logf,
@@ -168,6 +168,7 @@ func New(name string, dataPath string, maxBytesPerFile int64,
 	go d.ioLoop()
 	return &d
 }
+
 func (d *diskQueue) GetName() string {
 	return d.name
 }
@@ -176,6 +177,27 @@ func (d *diskQueue) GetName() string {
 // 返回只读型通道
 func (d *diskQueue) ReadChan() <-chan []byte {
 	return d.readChan
+}
+
+// 返回数据： data， true
+// 当前队列无数据： nil， false
+func (d *diskQueue) ReadNoBlock() ([]byte, bool) {
+
+	for {
+		if d.ReadEnd() {
+			return nil, false
+		}
+		ticker := time.NewTicker(10 * time.Millisecond)
+
+		select {
+		case <-ticker.C:
+			continue
+		case msg := <-d.readChan:
+			return msg, true
+		}
+
+	}
+
 }
 
 // Put writes a []byte to the queue
@@ -193,7 +215,7 @@ func (d *diskQueue) Put(data []byte) error {
 	if err != nil {
 		return err
 	} else {
-		d.NoMessageSetFalse()
+		atomic.CompareAndSwapInt32(&d.noMessage, 1, 0)
 		return nil
 	}
 }
@@ -257,48 +279,9 @@ func (d *diskQueue) Empty() error {
 	return <-d.emptyResponseChan
 }
 
-func (d *diskQueue) NoMessageSetFalse() {
-	d.noMessageLock.Lock()
-	defer d.noMessageLock.Unlock()
-	// 不管有没有，都置为false
-	select {
-	case <-d.noMessage:
-		d.noMessage <- false
-	default:
-		d.noMessage <- false
-	}
-}
-
-func (d *diskQueue) NoMessageSetTrue() {
-	d.noMessageLock.Lock()
-	defer d.noMessageLock.Unlock()
-	// 不管有没有，都置为true
-	select {
-	case <-d.noMessage:
-		d.noMessage <- true
-	default:
-		d.noMessage <- true
-	}
-}
-
 // 如果没有消息，那么取出来要将没有消息的信息继续放进通道
 func (d *diskQueue) ReadEnd() bool {
-	d.noMessageLock.RLock()
-	defer d.noMessageLock.RUnlock()
-	select {
-	case ok := <-d.noMessage:
-		if ok {
-			select {
-			case d.noMessage <- ok:
-				return ok
-			default:
-				return ok
-			}
-		}
-		return ok
-	default:
-		return false
-	}
+	return d.noMessage == 1
 }
 
 func (d *diskQueue) deleteAllFiles() error {
@@ -618,6 +601,7 @@ func (d *diskQueue) fileName(fileNum int64) string {
 }
 
 func (d *diskQueue) moveForward() {
+	// 如果被读取了，那么将文件偏移往前提交
 	oldReadFileNum := d.readFileNum
 	d.readFileNum = d.nextReadFileNum
 	d.readPos = d.nextReadPos
@@ -700,9 +684,7 @@ func (d *diskQueue) ioLoop() {
 			r = d.readChan
 		} else {
 			r = nil
-
-			d.NoMessageSetTrue()
-
+			atomic.CompareAndSwapInt32(&d.noMessage, 0, 1)
 		}
 
 		select {

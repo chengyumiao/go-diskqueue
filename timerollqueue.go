@@ -320,6 +320,9 @@ func (w *WALTimeRollQueue) ReadMsg() ([]byte, bool) {
 
 func (w *WALTimeRollQueue) readChan() (<-chan []byte, bool) {
 
+	w.Lock()
+	defer w.Unlock()
+
 	if w.exitFlag > 0 {
 		return nil, false
 	}
