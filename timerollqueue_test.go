@@ -266,12 +266,14 @@ func TestBasicRead(t *testing.T) {
 	count := 0
 
 	for {
-		msg, ok := wal2.readChan()
+		msg, ok := wal2.ReadMsg()
 		if !ok {
 			break
 		}
+		if string(msg) != "a" {
+			t.Fatal("message err")
+		}
 		count++
-		_ = <-msg
 	}
 
 	if count != 10 {
@@ -280,7 +282,6 @@ func TestBasicRead(t *testing.T) {
 
 }
 
-// 目前这个版本只支持并发写
 func TestConCurrencyWriteAndRead(t *testing.T) {
 	l := NewTestLogger(t)
 	options := DefaultOption()
@@ -399,16 +400,12 @@ func TestConCurrencyWriteAndCurrencyRead(t *testing.T) {
 
 	wal2, _ := wal2I.(*WALTimeRollQueue)
 
-	wal2.startReadChan()
-
 	for j := 0; j < 5; j++ {
 		wg.Add(1)
 		go func() {
-			msgChan := wal2.ReadChan()
-
 			for {
 
-				msg, ok := <-msgChan
+				msg, ok := wal2.ReadMsg()
 
 				if !ok {
 					break
@@ -424,18 +421,6 @@ func TestConCurrencyWriteAndCurrencyRead(t *testing.T) {
 	}
 
 	wg.Wait()
-
-	// for {
-	// 	msgBytes, ok := wal2.ReadMsg()
-	// 	if ok {
-	// 		atomic.AddInt32(&count, 1)
-	// 		if string(msgBytes) != "a" {
-	// 			t.Fatal("not equal a")
-	// 		}
-	// 	} else {
-	// 		break
-	// 	}
-	// }
 
 	if count != 20000 {
 		t.Fatal("read count not equal write count", "read count", count)

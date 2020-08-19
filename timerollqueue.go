@@ -68,11 +68,7 @@ type WALTimeRollQueueI interface {
 	Put([]byte) error
 	// 启动， 一旦启动会开启一个新的activeQueue，并且从磁盘中获取所有的队列，将其放入repair列表
 	Start() error
-	// 读取消息，只会从repair队列中读取消息，不会去读取当前队列的消息
-	// 不停地读消息，如果能读到则返回ok，否则返回false
-	ReadChan() <-chan []byte // this is expected to be an *unbuffered* channel
 
-	// 单线程安全
 	ReadMsg() ([]byte, bool)
 	// 关闭：关闭activeQueue并且同步磁盘
 	Close()
@@ -255,28 +251,24 @@ func (w *WALTimeRollQueue) repair() {
 			return
 		}
 
-		msgChan, ok := w.readChan()
+		msg, ok := w.ReadMsg()
 
 		if !ok {
 			w.finishFlag = true
 		}
 
-		if msgChan == nil {
+		if msg == nil {
 			continue
-		} else {
-			msg := <-msgChan
-			if msg == nil {
-				continue
-			}
-			for {
-				ok := w.rpf(msg)
-				if !ok {
-					w.logf(ERROR, "WALTimeRollQueue process repair message failed")
-					time.Sleep(w.backoffDuration)
-				} else {
-					// 按照这个速度，恢复的时候最快也就是5w个点每秒
-					time.Sleep(w.limiterDuration)
-				}
+		}
+		
+		for {
+			ok := w.rpf(msg)
+			if !ok {
+				w.logf(ERROR, "WALTimeRollQueue process repair message failed")
+				time.Sleep(w.backoffDuration)
+			} else {
+				// 按照这个速度，恢复的时候最快也就是5w个点每秒
+				time.Sleep(w.limiterDuration)
 			}
 		}
 
@@ -293,32 +285,7 @@ func (w *WALTimeRollQueue) Start() error {
 	return nil
 }
 
-// 阻塞型读取，关闭队列关闭，不适合无写入的情况，写入退出后，一定要关闭队列，这样读收到信号也会立马退出。
-func (w *WALTimeRollQueue) ReadChan() <-chan []byte {
-	return w.msgChan
-}
-
-// 读取数据直到队列里面没有数据，不管队列有没有关闭，如果所有的数据都被读完也会退出。
-// 非线程安全，单个线程安全
 func (w *WALTimeRollQueue) ReadMsg() ([]byte, bool) {
-
-	for {
-		msg, ok := w.readChan()
-		if !ok {
-			return nil, false
-		}
-		ticker := time.NewTicker(100 * time.Millisecond)
-		select {
-		case msgBytes := <-msg:
-			return msgBytes, true
-		case <-ticker.C:
-			continue
-		}
-	}
-
-}
-
-func (w *WALTimeRollQueue) readChan() (<-chan []byte, bool) {
 
 	w.Lock()
 	defer w.Unlock()
@@ -327,57 +294,26 @@ func (w *WALTimeRollQueue) readChan() (<-chan []byte, bool) {
 		return nil, false
 	}
 
-	if w.activeRepairQueue == nil {
-		return nil, false
-	} else {
-		if w.activeRepairQueue.ReadEnd() {
-			// 切换下一个队列，这里主动关闭了一次，切换
-			w.activeRepairQueue.Close()
-			newRepairQueue := w.getNextRepairQueueName(w.activeRepairQueue.GetName())
-			if newRepairQueue == "" {
-				return nil, false
-			}
-			w.activeRepairQueue = New(newRepairQueue, w.dataPath, w.maxBytesPerFile, w.minMsgSize, w.maxMsgSize, w.syncEvery, w.syncTimeout, w.logf)
-			return w.readChan()
-		}
-
-		return w.activeRepairQueue.ReadChan(), true
-	}
-
-}
-
-func (w *WALTimeRollQueue) startReadChan() {
-
+	
 	for {
-		if w.exitFlag > 0 {
-			close(w.msgChan)
-			return
-		}
 
 		if w.activeRepairQueue == nil {
-			close(w.msgChan)
-			return
+			return nil, false
 		} else {
-			if w.activeRepairQueue.ReadEnd() {
-				// 切换下一个队列，这里主动关闭了一次，切换
+	
+			if msg, ok := w.activeRepairQueue.ReadNoBlock(); ok {
+				return msg, true
+			}else {
 				w.activeRepairQueue.Close()
 				newRepairQueue := w.getNextRepairQueueName(w.activeRepairQueue.GetName())
 				if newRepairQueue == "" {
-					close(w.msgChan)
+					return nil, false
 				}
 				w.activeRepairQueue = New(newRepairQueue, w.dataPath, w.maxBytesPerFile, w.minMsgSize, w.maxMsgSize, w.syncEvery, w.syncTimeout, w.logf)
-			}
-
-			msgChan := w.activeRepairQueue.ReadChan()
-			ticker := time.NewTicker(100 * time.Millisecond)
-			select {
-			case msg := <-msgChan:
-				if msg != nil {
-					w.msgChan <- msg
-				}
-			case <-ticker.C:
-			}
+				continue
+			}	
 		}
+			
 	}
 
 }
