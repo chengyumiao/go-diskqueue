@@ -72,6 +72,9 @@ type WALTimeRollQueueI interface {
 	ReadMsg() ([]byte, bool)
 	// 关闭：关闭activeQueue并且同步磁盘
 	Close()
+	SetRepairProcessFunc(rpf func(msg []byte) bool)
+	// 是否修复完成
+	FinishRepaired() bool
 	// 删除某个时间戳之前的冷冻队列
 	DeleteForezenBefore(t int64)
 	// 删除repair队列
@@ -242,6 +245,10 @@ func (w *WALTimeRollQueue) Put(msg []byte) error {
 
 }
 
+func (w *WALTimeRollQueue) SetRepairProcessFunc(rpf func(msg []byte) bool) {
+	w.rpf = rpf
+}
+
 func (w *WALTimeRollQueue) repair() {
 
 	// 开启一个读go程去从repair队列中将读出来，等待上层取走，一旦读通道空出来则开始读，第一次读的时候去返回一个空的消息
@@ -260,7 +267,7 @@ func (w *WALTimeRollQueue) repair() {
 		if msg == nil {
 			continue
 		}
-		
+
 		for {
 			ok := w.rpf(msg)
 			if !ok {
@@ -269,6 +276,7 @@ func (w *WALTimeRollQueue) repair() {
 			} else {
 				// 按照这个速度，恢复的时候最快也就是5w个点每秒
 				time.Sleep(w.limiterDuration)
+				break
 			}
 		}
 
@@ -280,6 +288,10 @@ func (w *WALTimeRollQueue) Start() error {
 	err := w.init()
 	if err != nil {
 		return err
+	}
+
+	if w.rpf != nil {
+		go w.repair()
 	}
 
 	return nil
@@ -294,16 +306,15 @@ func (w *WALTimeRollQueue) ReadMsg() ([]byte, bool) {
 		return nil, false
 	}
 
-	
 	for {
 
 		if w.activeRepairQueue == nil {
 			return nil, false
 		} else {
-	
+
 			if msg, ok := w.activeRepairQueue.ReadNoBlock(); ok {
 				return msg, true
-			}else {
+			} else {
 				w.activeRepairQueue.Close()
 				newRepairQueue := w.getNextRepairQueueName(w.activeRepairQueue.GetName())
 				if newRepairQueue == "" {
@@ -311,9 +322,9 @@ func (w *WALTimeRollQueue) ReadMsg() ([]byte, bool) {
 				}
 				w.activeRepairQueue = New(newRepairQueue, w.dataPath, w.maxBytesPerFile, w.minMsgSize, w.maxMsgSize, w.syncEvery, w.syncTimeout, w.logf)
 				continue
-			}	
+			}
 		}
-			
+
 	}
 
 }
@@ -378,6 +389,10 @@ func (w *WALTimeRollQueue) DeleteRepairs() {
 			w.logf(ERROR, "WALTimeRollQueue DeleteRepairs delteQueue %s", err)
 		}
 	}
+}
+
+func (w *WALTimeRollQueue) FinishRepaired() bool {
+	return w.finishFlag
 }
 
 func NewTimeRollQueue(log AppLogFunc, options *Options) WALTimeRollQueueI {

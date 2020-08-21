@@ -512,3 +512,51 @@ func TestReadBench(t *testing.T) {
 	t.Log("per read op: ", time.Since(start).Nanoseconds()/int64(3*10000), "ns")
 
 }
+
+func TestRepairProcessFunc(t *testing.T) {
+
+	l := NewTestLogger(t)
+	options := DefaultOption()
+
+	tmpDir, err := ioutil.TempDir("", fmt.Sprintf("TestRepairProcessFunc-%d", time.Now().UnixNano()))
+	if err != nil {
+		panic(err)
+	}
+
+	defer os.RemoveAll(tmpDir)
+	options.DataPath = tmpDir
+	options.Name = "TestRepairProcessFunc"
+
+	wal := NewTimeRollQueue(l, options)
+
+	err = wal.Start()
+	if err != nil {
+		t.Fatal("start err", err)
+	}
+
+	for i := 0; i < 100; i++ {
+		err := wal.Put([]byte("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))
+		if err != nil {
+			t.Fatal("Put error", err)
+		}
+	}
+
+	wal.Close()
+
+	rpf := func(msg []byte) bool {
+		t.Log("msg: ", string(msg))
+		return true
+	}
+
+	wal2I := NewTimeRollQueue(l, options)
+	wal2I.SetRepairProcessFunc(rpf)
+	wal2I.Start()
+
+	for {
+		time.Sleep(1 * time.Second)
+		if wal2I.FinishRepaired() {
+			break
+		}
+	}
+
+}
