@@ -26,6 +26,7 @@ const (
 	DefaultSyncEvery          = 500
 	DefaultSyncTimeout        = 2 * time.Second
 	DefaultRollTimeSpanSecond = 2 * 3600
+	DefaultRotationTimeSecond = 4 * 3600
 	DefaultBackoffDuration    = 100 * time.Millisecond
 	DefaultLimiterDuration    = 20 * time.Microsecond
 	L
@@ -41,6 +42,7 @@ type Options struct {
 	SyncEvery          int64         `json:"WALTimeRollQueue.SyncEvery"`
 	SyncTimeout        time.Duration `json:"WALTimeRollQueue.SyncTimeout"`
 	RollTimeSpanSecond int64         `json:"WALTimeRollQueue.RollTimeSpanSecond"` // 配置单位为s
+	RotationTimeSecond int64         `json:"WALTimeRollQueue.RotationTimeSecond"` // 单位为s
 	BackoffDuration    time.Duration `json:"WALTimeRollQueue.BackoffDuration"`
 	LimiterDuration    time.Duration `json:"WALTimeRollQueue.LimiterDuration"`
 }
@@ -55,6 +57,7 @@ func DefaultOption() *Options {
 		SyncEvery:          DefaultSyncEvery,
 		SyncTimeout:        DefaultSyncTimeout,
 		RollTimeSpanSecond: DefaultRollTimeSpanSecond,
+		RotationTimeSecond: DefaultRotationTimeSecond,
 		BackoffDuration:    DefaultBackoffDuration,
 		LimiterDuration:    DefaultLimiterDuration,
 	}
@@ -106,6 +109,8 @@ type WALTimeRollQueue struct {
 	syncEvery int64 // number of writes per fsync
 	// 最迟的同步时间，如果一段时间没有同步，则开启同步
 	syncTimeout time.Duration // duration of time per fsync
+	// 保留时间
+	rotation time.Duration
 	// 滚动的时间间隔，单位为s
 	rollTimeSpan time.Duration
 	// 下次切换的时间点
@@ -151,6 +156,32 @@ func (w *WALTimeRollQueue) getAllRepairQueueNames() ([]string, error) {
 	}
 	sort.Sort(StringSlice(queueNames))
 	return queueNames, nil
+}
+
+func (w *WALTimeRollQueue) getAllExpiredQueueTimeStamps() []int64 {
+
+	allQueueName, err := w.getAllRepairQueueNames()
+	if err != nil {
+		w.logf(ERROR, "WALTimeRollQueue getAllExpiredQueueTimeStamps strconv.Atoi %s", err)
+		return nil
+	}
+
+	times := []int64{}
+
+	for _, name := range allQueueName {
+		t := strings.TrimPrefix(name, w.Name+"_")
+		timestamp, err := strconv.ParseInt(t, 10, 64)
+		if err != nil {
+			w.logf(ERROR, "WALTimeRollQueue getAllExpiredQueueTimeStamps strconv.Atoi %s", err)
+		} else {
+			if timestamp < time.Now().UnixNano()-w.rotation.Nanoseconds() {
+				times = append(times, timestamp)
+			}
+		}
+	}
+
+	return times
+
 }
 
 func (w *WALTimeRollQueue) getNextRepairQueueName(name string) string {
@@ -391,6 +422,18 @@ func (w *WALTimeRollQueue) DeleteRepairs() {
 	}
 }
 
+func (w *WALTimeRollQueue) deleteExpired() {
+
+	ts := w.getAllExpiredQueueTimeStamps()
+	for _, time := range ts {
+		err := w.delteQueue(w.Name + "_" + strconv.FormatInt(time, 10))
+		if err != nil {
+			w.logf(ERROR, "WALTimeRollQueue deleteExpired delteQueue %s", err)
+		}
+	}
+
+}
+
 func (w *WALTimeRollQueue) FinishRepaired() bool {
 	return w.finishFlag
 }
@@ -406,6 +449,7 @@ func NewTimeRollQueue(log AppLogFunc, options *Options) WALTimeRollQueueI {
 		syncEvery:       options.SyncEvery,
 		syncTimeout:     options.SyncTimeout,
 		rollTimeSpan:    time.Duration(options.RollTimeSpanSecond) * time.Second,
+		rotation:        time.Duration(options.RotationTimeSecond) * time.Second,
 		backoffDuration: options.BackoffDuration,
 		logf:            log,
 		msgChan:         make(chan []byte),

@@ -1,12 +1,14 @@
 package diskqueue
 
 import (
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"log"
 	"math/rand"
 	"net/http"
 	"os"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -558,5 +560,111 @@ func TestRepairProcessFunc(t *testing.T) {
 			break
 		}
 	}
+
+}
+
+func TestRotation(t *testing.T) {
+
+	l := NewTestLogger(t)
+	options := DefaultOption()
+
+	tmpDir, err := ioutil.TempDir("", fmt.Sprintf("TestRotation-%d", time.Now().UnixNano()))
+	if err != nil {
+		panic(err)
+	}
+
+	defer os.RemoveAll(tmpDir)
+	options.DataPath = tmpDir
+	options.SyncTimeout = time.Second
+	options.RollTimeSpanSecond = 1
+	options.RotationTimeSecond = 3
+	options.Name = "TestRotation"
+
+	wal := NewTimeRollQueue(l, options)
+
+	err = wal.Start()
+	if err != nil {
+		t.Fatal("start err", err)
+	}
+
+	wal2, _ := wal.(*WALTimeRollQueue)
+
+	writeErr := make(chan error)
+	readErr := make(chan error)
+
+	// write go
+	go func() {
+
+		ticker := time.NewTicker(100 * time.Millisecond)
+
+	LOOP:
+		for {
+
+			select {
+			case err := <-readErr:
+				writeErr <- err
+				break LOOP
+			case <-ticker.C:
+				err := wal.Put([]byte("a"))
+				if err != nil {
+					t.Log("Put error", err)
+					writeErr <- err
+					break LOOP
+				}
+
+			}
+
+		}
+	}()
+
+	go func() {
+
+		for i := 0; i < 3; i++ {
+			time.Sleep(4 * time.Second)
+			names, err := wal2.getAllRepairQueueNames()
+			if err != nil {
+				t.Log("getAllRepairQueueNames err")
+				readErr <- err
+				return
+			}
+			if len(names) <= 3 {
+				t.Log("len err", len(names), " ", names)
+				readErr <- errors.New("len err <= 3 " + strconv.Itoa(len(names)))
+				return
+			} else {
+				t.Log("begin rm len: ", len(names), " ", names)
+
+			}
+
+			wal2.deleteExpired()
+			names, err = wal2.getAllRepairQueueNames()
+			if err != nil {
+				t.Log("getAllRepairQueueNames err")
+				readErr <- err
+				return
+			}
+			if len(names) <= 3 {
+
+				t.Log("after rm len: ", len(names), " ", names)
+
+			} else {
+				t.Log("len err", len(names), " ", names)
+				readErr <- errors.New("len err" + strconv.Itoa(len(names)))
+				return
+			}
+
+		}
+
+		readErr <- nil
+	}()
+
+	err = <-writeErr
+	if err != nil {
+		t.Fatal("ERR: ", err)
+	}
+
+	t.Log("get exit")
+
+	defer wal.Close()
 
 }
