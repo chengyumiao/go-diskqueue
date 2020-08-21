@@ -427,3 +427,88 @@ func TestConCurrencyWriteAndCurrencyRead(t *testing.T) {
 	}
 	wal2.Close()
 }
+
+// BenchmarkPut-4   	   78355	     15525 ns/op	     107 B/op	       3 allocs/op
+func BenchmarkPut(t *testing.B) {
+
+	l := NewTestLogger(t)
+	options := DefaultOption()
+
+	tmpDir, err := ioutil.TempDir("", fmt.Sprintf("BenchmarkPut-%d", time.Now().UnixNano()))
+	if err != nil {
+		panic(err)
+	}
+
+	defer os.RemoveAll(tmpDir)
+	options.DataPath = tmpDir
+	options.Name = "BenchmarkPut"
+
+	wal := NewTimeRollQueue(l, options)
+	defer wal.Close()
+
+	err = wal.Start()
+	if err != nil {
+		t.Fatal("start err", err)
+	}
+
+	for i := 0; i < t.N; i++ {
+		err := wal.Put([]byte("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))
+		if err != nil {
+			t.Fatal("Put error", err)
+		}
+	}
+}
+
+// per read op:  22784 ns
+func TestReadBench(t *testing.T) {
+
+	l := NewTestLogger(t)
+	options := DefaultOption()
+
+	tmpDir, err := ioutil.TempDir("", fmt.Sprintf("BenchmarkPut-%d", time.Now().UnixNano()))
+	if err != nil {
+		panic(err)
+	}
+
+	defer os.RemoveAll(tmpDir)
+	options.DataPath = tmpDir
+	options.Name = "BenchmarkPut"
+
+	wal := NewTimeRollQueue(l, options)
+
+	err = wal.Start()
+	if err != nil {
+		t.Fatal("start err", err)
+	}
+
+	for i := 0; i < 10000; i++ {
+		err := wal.Put([]byte("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))
+		if err != nil {
+			t.Fatal("Put error", err)
+		}
+	}
+
+	wal.Close()
+
+	start := time.Now()
+
+	for i := 0; i < 3; i++ {
+		wal2I := NewTimeRollQueue(l, options)
+		wal2I.Start()
+
+		for i := 0; i < 10000; i++ {
+
+			_, ok := wal2I.ReadMsg()
+			if !ok {
+				break
+			}
+
+		}
+
+		wal2I.Close()
+
+	}
+
+	t.Log("per read op: ", time.Since(start).Nanoseconds()/int64(3*10000), "ns")
+
+}
