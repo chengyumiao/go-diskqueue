@@ -481,14 +481,14 @@ func (w *WALTimeRollQueue) init() error {
 	w.forezenQueues = []string{}
 	var err error
 	w.repairQueueNames, err = w.getAllRepairQueueNames()
+	//刷新所有repair队列的元信息中的readPos， readNum
+	w.ResetRepairs()
 	if len(w.repairQueueNames) > 0 {
 		w.activeRepairQueue = New(w.repairQueueNames[0], w.dataPath, w.maxBytesPerFile, w.minMsgSize, w.maxMsgSize, w.syncEvery, w.syncTimeout, w.logf)
 	}
 	if err != nil {
 		return err
 	}
-	//刷新所有repair队列的元信息中的readPos， readNum
-	w.ResetRepairs()
 	return nil
 
 }
