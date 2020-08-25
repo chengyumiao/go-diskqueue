@@ -453,6 +453,7 @@ func NewTimeRollQueue(log AppLogFunc, options *Options) WALTimeRollQueueI {
 		rollTimeSpan:    time.Duration(options.RollTimeSpanSecond) * time.Second,
 		rotation:        time.Duration(options.RotationTimeSecond) * time.Second,
 		backoffDuration: options.BackoffDuration,
+		limiterDuration: options.LimiterDuration,
 		logf:            log,
 		msgChan:         make(chan []byte),
 	}
