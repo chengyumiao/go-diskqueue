@@ -28,9 +28,9 @@ const (
 	DefaultRollTimeSpanSecond = 2 * 3600
 	DefaultRotationTimeSecond = 4 * 3600
 	DefaultBackoffDuration    = 100 * time.Millisecond
-	DefaultLimiterDuration    = 20 * time.Microsecond
-	L
-	QueueMetaSuffix = ".diskqueue.meta.dat"
+	DefaultLimiterBatch       = 1000
+	DefaultLimiterDuration    = 100 * time.Millisecond
+	QueueMetaSuffix           = ".diskqueue.meta.dat"
 )
 
 type Options struct {
@@ -44,6 +44,7 @@ type Options struct {
 	RollTimeSpanSecond int64         `json:"WALTimeRollQueue.RollTimeSpanSecond"` // 配置单位为s
 	RotationTimeSecond int64         `json:"WALTimeRollQueue.RotationTimeSecond"` // 单位为s
 	BackoffDuration    time.Duration `json:"WALTimeRollQueue.BackoffDuration"`
+	LimiterBatch       int           `json:"WALTimeRollQueue.LimiterBatch"`
 	LimiterDuration    time.Duration `json:"WALTimeRollQueue.LimiterDuration"`
 }
 
@@ -59,6 +60,7 @@ func DefaultOption() *Options {
 		RollTimeSpanSecond: DefaultRollTimeSpanSecond,
 		RotationTimeSecond: DefaultRotationTimeSecond,
 		BackoffDuration:    DefaultBackoffDuration,
+		LimiterBatch:       DefaultLimiterBatch,
 		LimiterDuration:    DefaultLimiterDuration,
 	}
 }
@@ -111,12 +113,15 @@ type WALTimeRollQueue struct {
 	syncTimeout time.Duration // duration of time per fsync
 	// 保留时间
 	rotation time.Duration
-	// 滚动的时间间隔，单位为s
+	// 滚动的时间间隔，单位为sint
 	rollTimeSpan time.Duration
 	// 下次切换的时间点
 	nextRollTime int64
 	// 每次调用repair process 函数出错后的回退时间
 	backoffDuration time.Duration
+	repairCount     int64
+	// 每读取多少条消息，休息一会儿，来搞定流控
+	limiterBatch int
 	// 控制读取频率，每次读取后主动睡眠时间，防止读取过快
 	limiterDuration time.Duration
 
@@ -301,16 +306,21 @@ func (w *WALTimeRollQueue) repair() {
 			continue
 		}
 
+		atomic.AddInt64(&w.repairCount, 1)
+
 		for {
 			ok := w.rpf(msg)
 			if !ok {
 				w.logf(ERROR, "WALTimeRollQueue process repair message failed")
 				time.Sleep(w.backoffDuration)
 			} else {
-				// 按照这个速度，恢复的时候最快也就是5w个点每秒
-				time.Sleep(w.limiterDuration)
 				break
 			}
+		}
+
+		// 按照这个速度，恢复的时候最快也就是5w个点每秒
+		if atomic.LoadInt64(&w.repairCount)%int64(w.limiterBatch) == 0 {
+			time.Sleep(w.limiterDuration)
 		}
 
 	}
@@ -348,7 +358,10 @@ func (w *WALTimeRollQueue) ReadMsg() ([]byte, bool) {
 			if msg, ok := w.activeRepairQueue.ReadNoBlock(); ok {
 				return msg, true
 			} else {
-				w.activeRepairQueue.Close()
+				err := w.activeRepairQueue.Close()
+				if err != nil {
+					w.logf(ERROR, "WALTimeRollQueue Close activeRepairQueue err %s", err)
+				}
 				newRepairQueue := w.getNextRepairQueueName(w.activeRepairQueue.GetName())
 				if newRepairQueue == "" {
 					return nil, false
@@ -453,6 +466,7 @@ func NewTimeRollQueue(log AppLogFunc, options *Options) WALTimeRollQueueI {
 		rollTimeSpan:    time.Duration(options.RollTimeSpanSecond) * time.Second,
 		rotation:        time.Duration(options.RotationTimeSecond) * time.Second,
 		backoffDuration: options.BackoffDuration,
+		limiterBatch:    options.LimiterBatch,
 		limiterDuration: options.LimiterDuration,
 		logf:            log,
 		msgChan:         make(chan []byte),
