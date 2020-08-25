@@ -293,6 +293,8 @@ func (w *WALTimeRollQueue) repair() {
 
 		if !ok {
 			w.finishFlag = true
+			// 退出修复go程
+			break
 		}
 
 		if msg == nil {
