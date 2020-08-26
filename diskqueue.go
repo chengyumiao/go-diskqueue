@@ -188,6 +188,7 @@ func (d *diskQueue) ReadNoBlock() ([]byte, bool) {
 			return nil, false
 		}
 		ticker := time.NewTicker(200 * time.Millisecond)
+		defer ticker.Stop()
 
 		select {
 		case <-ticker.C:

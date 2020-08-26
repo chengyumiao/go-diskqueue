@@ -219,6 +219,7 @@ func (w *WALTimeRollQueue) getForezenQueuesTimeStamps() []int64 {
 func (w *WALTimeRollQueue) resetQueue(name string) error {
 	q := New(name, w.dataPath, w.maxBytesPerFile, w.minMsgSize, w.maxMsgSize, w.syncEvery, w.syncTimeout, w.logf)
 	if q != nil {
+		defer q.Close()
 		return q.ResetReadMetaData()
 	}
 	return nil
@@ -227,6 +228,7 @@ func (w *WALTimeRollQueue) resetQueue(name string) error {
 func (w *WALTimeRollQueue) delteQueue(name string) error {
 	q := New(name, w.dataPath, w.maxBytesPerFile, w.minMsgSize, w.maxMsgSize, w.syncEvery, w.syncTimeout, w.logf)
 	if q != nil {
+		defer q.Close()
 		return q.Empty()
 	}
 	return nil

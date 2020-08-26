@@ -13,7 +13,7 @@ import (
 	"net/http"
 	_ "net/http/pprof"
 
-	"github.com/nsqio/go-diskqueue"
+	"github.com/chengyumiao/go-diskqueue"
 )
 
 func test1() {
