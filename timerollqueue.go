@@ -28,8 +28,8 @@ const (
 	DefaultRollTimeSpanSecond = 2 * 3600
 	DefaultRotationTimeSecond = 4 * 3600
 	DefaultBackoffDuration    = 100 * time.Millisecond
-	DefaultLimiterBatch       = 1000
-	DefaultLimiterDuration    = 100 * time.Millisecond
+	DefaultLimiterBatch       = 100000
+	DefaultLimiterDuration    = 0 // 默认不去做流控了，实在需要在应用层自己设置呗
 	QueueMetaSuffix           = ".diskqueue.meta.dat"
 )
 

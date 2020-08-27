@@ -42,8 +42,8 @@ func main() {
 
 	options.DataPath = tmpDir
 	options.Name = "Repair"
-	options.MaxBytesPerFile = 5 * 1024 * 1024
-	options.RollTimeSpanSecond = 3
+	options.MaxBytesPerFile = 256 * 1024 * 1024
+	options.RollTimeSpanSecond = 7200
 
 	wal := diskqueue.NewTimeRollQueue(l, options)
 
@@ -52,8 +52,10 @@ func main() {
 		fmt.Println("start err", err)
 	}
 
-	ticker := time.NewTicker(5 * time.Second)
+	ticker := time.NewTicker(15 * time.Second)
 	exit := false
+
+	writeCount := 0
 	for !exit {
 		select {
 		case <-ticker.C:
@@ -63,6 +65,8 @@ func main() {
 			if err != nil {
 				fmt.Println("Put error", err)
 			}
+			writeCount++
+
 		}
 
 	}
@@ -73,10 +77,12 @@ func main() {
 
 	fmt.Println("finish write......................................................................................")
 
+	start := time.Now()
 	wal = diskqueue.NewTimeRollQueue(l, options)
 
+	repairCount := 0
 	rpf := func(msg []byte) bool {
-		// fmt.Println(string(msg))
+		repairCount++
 		return true
 	}
 
@@ -96,6 +102,8 @@ func main() {
 
 	wal.Close()
 
-	time.Sleep(10000 * time.Second)
+	speedSecond := time.Since(start).Seconds()
+
+	fmt.Println("repair speed time: ", speedSecond, "write count: ", writeCount, "read count: ", repairCount)
 
 }
