@@ -179,7 +179,7 @@ func (w *WALTimeRollQueue) getAllExpiredQueueTimeStamps() []int64 {
 		if err != nil {
 			w.logf(ERROR, "WALTimeRollQueue getAllExpiredQueueTimeStamps strconv.Atoi %s", err)
 		} else {
-			if timestamp < time.Now().UnixNano()-w.rotation.Nanoseconds() {
+			if timestamp < time.Now().UnixNano()-w.rotation.Nanoseconds()-w.rollTimeSpan.Nanoseconds() {
 				times = append(times, timestamp)
 			}
 		}
