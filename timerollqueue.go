@@ -90,11 +90,12 @@ type WALTimeRollQueueI interface {
 }
 
 type WALTimeRollQueueStats struct {
-	ForezenQueuesNum       int   `json:"ForezenQueuesNum"`
-	RepairQueueNamesNum    int   `json:"RepairQueueNamesNum"`
-	LeftOverRepairQueueNum int   `json:"LeftOverRepairQueueNum"`
-	RepairCount            int64 `json:"RepairCount"`
-	RepairFinished         bool  `json:"RepairFinished"`
+	Name                   string `json:"Name"`
+	ForezenQueuesNum       int    `json:"ForezenQueuesNum"`
+	RepairQueueNamesNum    int    `json:"RepairQueueNamesNum"`
+	LeftOverRepairQueueNum int    `json:"LeftOverRepairQueueNum"`
+	RepairCount            int64  `json:"RepairCount"`
+	RepairFinished         bool   `json:"RepairFinished"`
 }
 
 type WALTimeRollQueue struct {
@@ -160,6 +161,7 @@ func (w *WALTimeRollQueue) Stats() *WALTimeRollQueueStats {
 	leftOverRepairQueueNames, _ := w.GetLeftOverRepairQueueNames()
 
 	stats := &WALTimeRollQueueStats{
+		Name:                   w.Name,
 		RepairCount:            atomic.LoadInt64(&w.repairCount),
 		RepairFinished:         w.finishFlag,
 		ForezenQueuesNum:       len(w.getForezenQueuesTimeStamps()),
