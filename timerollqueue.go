@@ -77,6 +77,9 @@ type WALTimeRollQueueI interface {
 	ReadMsg() ([]byte, bool)
 	// 关闭：关闭activeQueue并且同步磁盘
 	Close()
+
+	Stats() *WALTimeRollQueueStats
+
 	SetRepairProcessFunc(rpf func(msg []byte) bool)
 	// 是否修复完成
 	FinishRepaired() bool
@@ -151,7 +154,7 @@ func (s StringSlice) Less(i, j int) bool {
 }
 func (s StringSlice) Swap(i, j int) { s[i], s[j] = s[j], s[i] }
 
-func (w *WALTimeRollQueue) GetWALTimeRollQueueStats() *WALTimeRollQueueStats {
+func (w *WALTimeRollQueue) Stats() *WALTimeRollQueueStats {
 
 	allRepairQueueNames, _ := w.getAllRepairQueueNames()
 	leftOverRepairQueueNames, _ := w.GetLeftOverRepairQueueNames()
