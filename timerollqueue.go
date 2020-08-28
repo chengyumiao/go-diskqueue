@@ -86,6 +86,14 @@ type WALTimeRollQueueI interface {
 	DeleteRepairs()
 }
 
+type WALTimeRollQueueStats struct {
+	ForezenQueuesNum       int   `json:"ForezenQueuesNum"`
+	RepairQueueNamesNum    int   `json:"RepairQueueNamesNum"`
+	LeftOverRepairQueueNum int   `json:"LeftOverRepairQueueNum"`
+	RepairCount            int64 `json:"RepairCount"`
+	RepairFinished         bool  `json:"RepairFinished"`
+}
+
 type WALTimeRollQueue struct {
 	// 每次roll的时候要加锁
 	sync.RWMutex
@@ -142,6 +150,52 @@ func (s StringSlice) Less(i, j int) bool {
 	return s[i] < s[j]
 }
 func (s StringSlice) Swap(i, j int) { s[i], s[j] = s[j], s[i] }
+
+func (w *WALTimeRollQueue) GetWALTimeRollQueueStats() *WALTimeRollQueueStats {
+
+	allRepairQueueNames, _ := w.getAllRepairQueueNames()
+	leftOverRepairQueueNames, _ := w.GetLeftOverRepairQueueNames()
+
+	stats := &WALTimeRollQueueStats{
+		RepairCount:            atomic.LoadInt64(&w.repairCount),
+		RepairFinished:         w.finishFlag,
+		ForezenQueuesNum:       len(w.getForezenQueuesTimeStamps()),
+		RepairQueueNamesNum:    len(allRepairQueueNames),
+		LeftOverRepairQueueNum: len(leftOverRepairQueueNames),
+	}
+
+	return stats
+}
+
+func (w *WALTimeRollQueue) GetLeftOverRepairQueueNames() ([]string, error) {
+
+	if w.finishFlag {
+		return nil, nil
+	}
+
+	allRepairQueues, err := w.getAllRepairQueueNames()
+	if err != nil {
+		return allRepairQueues, err
+	}
+
+	activeRepairQueue := w.activeRepairQueue
+	activeRepairQueueName := ""
+
+	if activeRepairQueue == nil {
+		return nil, nil
+	} else {
+		activeRepairQueueName = activeRepairQueue.GetName()
+	}
+
+	leftOverRepairQueue := []string{}
+	for _, queue := range allRepairQueues {
+		if queue >= activeRepairQueueName {
+			leftOverRepairQueue = append(leftOverRepairQueue, queue)
+		}
+	}
+
+	return leftOverRepairQueue, nil
+}
 
 func (w *WALTimeRollQueue) getAllRepairQueueNames() ([]string, error) {
 	files, err := ioutil.ReadDir(w.dataPath)
