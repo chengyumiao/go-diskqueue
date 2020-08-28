@@ -335,9 +335,18 @@ func (w *WALTimeRollQueue) Start() error {
 		return err
 	}
 
+	// 删除过期的队列
+	w.deleteExpired()
+
 	if w.rpf != nil {
 		go w.repair()
 	}
+
+	// 增加过期删除
+	go func() {
+		time.Sleep(5 * time.Minute)
+		w.deleteExpired()
+	}()
 
 	return nil
 }
