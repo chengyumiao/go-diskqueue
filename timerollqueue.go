@@ -5,6 +5,7 @@ import (
 	"io/ioutil"
 	"math/rand"
 	"os"
+	"path"
 	"sort"
 	"strconv"
 	"strings"
@@ -290,7 +291,7 @@ func (w *WALTimeRollQueue) delteQueue(name string) error {
 		defer q.Close()
 		return q.Empty()
 	}
-	return nil
+	return os.Remove(path.Join(w.dataPath, name+".diskqueue.meta.dat"))
 }
 
 func (w *WALTimeRollQueue) GetNowActiveQueueName() string {
@@ -403,8 +404,12 @@ func (w *WALTimeRollQueue) Start() error {
 
 	// 增加过期删除
 	go func() {
-		time.Sleep(5 * time.Minute)
-		w.deleteExpired()
+
+		for {
+			time.Sleep(5 * time.Minute)
+			w.deleteExpired()
+		}
+
 	}()
 
 	return nil

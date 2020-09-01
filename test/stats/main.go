@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"reflect"
 	"time"
 
 	_ "net/http/pprof"
@@ -55,7 +56,7 @@ func main() {
 		fmt.Println("start err", err)
 	}
 
-	ticker := time.NewTicker(18 * time.Second)
+	ticker := time.NewTicker(7 * time.Second)
 	exit := false
 
 	writeCount := 0
@@ -102,6 +103,23 @@ func main() {
 			break
 		}
 		time.Sleep(time.Second)
+
+		statInfo := wal.Stats()
+		stat := reflect.TypeOf(*statInfo)
+		value := reflect.ValueOf(*statInfo)
+
+		for i := 0; i < stat.NumField(); i++ {
+			field := stat.Field(i)
+			key := statInfo.Name + field.Tag.Get("json")
+			if key == "Name" {
+				continue
+			}
+
+			value := value.Field(i).Interface()
+			fmt.Println(key)
+			fmt.Println(value)
+		}
+
 		statsBytes, _ := json.MarshalIndent(wal.Stats(), " ", " ")
 		fmt.Println("stats", string(statsBytes))
 	}
