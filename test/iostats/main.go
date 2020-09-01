@@ -23,7 +23,7 @@ func write(wg *sync.WaitGroup, duration time.Duration, testDir string) {
 	}
 	options := diskqueue.DefaultOption()
 
-	real_dir := path.Join(TEST_DIR_PREFIX, fmt.Sprintf(testDir+"-%d", time.Now().UnixNano()))
+	real_dir := path.Join(TEST_DIR_PREFIX, testDir)
 	os.MkdirAll(real_dir, 0755)
 	options.DataPath = real_dir
 	options.Name = testDir
@@ -37,8 +37,8 @@ func write(wg *sync.WaitGroup, duration time.Duration, testDir string) {
 
 	ticker := time.NewTicker(duration)
 
-	slice_1 := []byte{'a', 'b', 'c', 'd', 'e', 'f', 'g'}
-	writeBytes := bytes.Repeat(slice_1, 20)
+	slice_1 := []byte{'a'}
+	writeBytes := bytes.Repeat(slice_1, 200*1000)
 
 OUT:
 	for {
@@ -64,7 +64,7 @@ func read(wg *sync.WaitGroup, duration time.Duration, testDir string) {
 	}
 	options := diskqueue.DefaultOption()
 
-	real_dir := path.Join(TEST_DIR_PREFIX, fmt.Sprintf(testDir+"-%d", time.Now().UnixNano()))
+	real_dir := path.Join(TEST_DIR_PREFIX, testDir)
 	options.DataPath = real_dir
 	options.Name = testDir
 
@@ -96,15 +96,26 @@ OUT:
 }
 
 func main() {
-	testDirPrefix := "IOSTATS_"
+	testDirPrefix := "IOSTATS"
 
-	wg := &sync.WaitGroup{}
+	wgWrite := &sync.WaitGroup{}
 
-	for i := 0; i < 1000; i++ {
-		wg.Add(1)
-		go write(wg, time.Second*300, testDirPrefix+strconv.Itoa(i))
+	for i := 0; i < 4; i++ {
+		wgWrite.Add(1)
+		go write(wgWrite, 5*time.Minute, testDirPrefix+strconv.Itoa(i))
+	}
+	// 睡眠一会儿等待
+	time.Sleep(120 * time.Second)
+	wgRead := &sync.WaitGroup{}
+
+	fmt.Println(string(bytes.Repeat([]byte{'-'}, 100)))
+
+	for i := 0; i < 4; i++ {
+		wgRead.Add(1)
+		go read(wgRead, time.Second*120, testDirPrefix+strconv.Itoa(i))
 	}
 
-	wg.Wait()
+	wgWrite.Wait()
+	wgRead.Wait()
 
 }
