@@ -288,14 +288,15 @@ func (w *WALTimeRollQueue) resetQueue(name string) error {
 func (w *WALTimeRollQueue) delteQueue(name string) error {
 	q := New(name, w.dataPath, w.maxBytesPerFile, w.minMsgSize, w.maxMsgSize, w.syncEvery, w.syncTimeout, w.logf)
 	if q != nil {
-		defer q.Close()
 		err := q.Empty()
+		q.Close()
 		if err != nil {
 			return err
 		} else {
 			return os.Remove(path.Join(w.dataPath, name+".diskqueue.meta.dat"))
 		}
 	} else {
+		os.Remove(path.Join(w.dataPath, name+".diskqueue.meta.dat"))
 		return errors.New(name + " diskqueue is noneexistent")
 	}
 }
