@@ -99,7 +99,7 @@ func TestRepairQueue(t *testing.T) {
 		logf:            l,
 	}
 
-	repairNames, err := walRecover.getAllRepairQueueNames()
+	repairNames, err := walRecover.getAllQueueNames()
 	if err != nil {
 		t.Fatal("getAllRepairQueueNames err ", err)
 	}
@@ -110,7 +110,8 @@ func TestRepairQueue(t *testing.T) {
 	walRecover.init()
 
 	if len(repairNames) >= 2 {
-		if repairNames[1] != walRecover.getNextRepairQueueName(repairNames[0]) {
+		nextQueue := walRecover.getNextRepairQueueName(repairNames[0])
+		if repairNames[1] != nextQueue {
 			t.Fatal("getNextRepairQueueName is err")
 		}
 	}
@@ -621,7 +622,7 @@ func TestRotation(t *testing.T) {
 
 		for i := 0; i < 3; i++ {
 			time.Sleep(4 * time.Second)
-			names, err := wal2.getAllRepairQueueNames()
+			names, err := wal2.getAllQueueNames()
 			if err != nil {
 				t.Log("getAllRepairQueueNames err")
 				readErr <- err
@@ -637,7 +638,7 @@ func TestRotation(t *testing.T) {
 			}
 
 			wal2.deleteExpired()
-			names, err = wal2.getAllRepairQueueNames()
+			names, err = wal2.getAllQueueNames()
 			if err != nil {
 				t.Log("getAllRepairQueueNames err")
 				readErr <- err
@@ -667,4 +668,87 @@ func TestRotation(t *testing.T) {
 
 	defer wal.Close()
 
+}
+
+func TestDelFinishRepair(t *testing.T) {
+	l := NewTestLogger(t)
+	options := DefaultOption()
+
+	tmpDir, err := ioutil.TempDir("", fmt.Sprintf("TestRotation-%d", time.Now().UnixNano()))
+	if err != nil {
+		panic(err)
+	}
+
+	defer os.RemoveAll(tmpDir)
+	options.DataPath = tmpDir
+	options.SyncTimeout = time.Second
+	options.RollTimeSpanSecond = 1
+	options.RotationTimeSecond = 3
+	options.Name = "TestRotation"
+
+	wal := NewTimeRollQueue(l, options)
+
+	err = wal.Start()
+	if err != nil {
+		t.Fatal("start err", err)
+	}
+
+	writeErr := make(chan error)
+	readErr := make(chan error)
+
+	// write go
+	go func() {
+
+		ticker := time.NewTicker(100 * time.Millisecond)
+
+	LOOP:
+		for {
+
+			select {
+			case err := <-readErr:
+				writeErr <- err
+				break LOOP
+			case <-ticker.C:
+				err := wal.Put([]byte("a"))
+				if err != nil {
+					t.Log("Put error", err)
+					writeErr <- err
+					break LOOP
+				}
+
+			}
+
+		}
+	}()
+
+	time.Sleep(10 * time.Second)
+	wal.Close()
+	time.Sleep(1 * time.Second)
+
+	wal = NewTimeRollQueue(l, options)
+	err = wal.Start()
+	if err != nil {
+		t.Fatal("wal2 start err", err)
+	}
+	wal2 := wal.(*WALTimeRollQueue)
+
+	names, err := wal2.getAllQueueNames()
+	if err != nil {
+		t.Log("getAllRepairQueueNames err")
+		readErr <- err
+		return
+	}
+	wal2.activeRepairQueue.Close()
+
+	wal2.activeRepairQueue = New(names[len(names)-1], options.DataPath, options.MaxBytesPerFile, options.MinMsgSize, options.MaxMsgSize, options.SyncEvery, options.SyncTimeout, wal2.logf)
+	wal2.DeleteFinishedRepairs()
+
+	names, err = wal2.getAllQueueNames()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(names) != 1 {
+		t.Fatal("len names err")
+	} 
 }

@@ -88,6 +88,8 @@ type WALTimeRollQueueI interface {
 	DeleteForezenBefore(t int64)
 	// 删除repair队列
 	DeleteRepairs()
+	// 删除已经修复完成的队列
+	DeleteFinishedRepairs()
 }
 
 type WALTimeRollQueueStats struct {
@@ -158,7 +160,7 @@ func (s StringSlice) Swap(i, j int) { s[i], s[j] = s[j], s[i] }
 
 func (w *WALTimeRollQueue) Stats() *WALTimeRollQueueStats {
 
-	allRepairQueueNames, _ := w.getAllRepairQueueNames()
+	allRepairQueueNames := w.repairQueueNames
 	leftOverRepairQueueNames, _ := w.GetLeftOverRepairQueueNames()
 
 	stats := &WALTimeRollQueueStats{
@@ -179,10 +181,7 @@ func (w *WALTimeRollQueue) GetLeftOverRepairQueueNames() ([]string, error) {
 		return nil, nil
 	}
 
-	allRepairQueues, err := w.getAllRepairQueueNames()
-	if err != nil {
-		return allRepairQueues, err
-	}
+	allRepairQueues := w.repairQueueNames
 
 	activeRepairQueue := w.activeRepairQueue
 	activeRepairQueueName := ""
@@ -203,7 +202,7 @@ func (w *WALTimeRollQueue) GetLeftOverRepairQueueNames() ([]string, error) {
 	return leftOverRepairQueue, nil
 }
 
-func (w *WALTimeRollQueue) getAllRepairQueueNames() ([]string, error) {
+func (w *WALTimeRollQueue) getAllQueueNames() ([]string, error) {
 	files, err := ioutil.ReadDir(w.dataPath)
 	if err != nil {
 		return nil, err
@@ -225,7 +224,7 @@ func (w *WALTimeRollQueue) getAllRepairQueueNames() ([]string, error) {
 
 func (w *WALTimeRollQueue) getAllExpiredQueueTimeStamps() []int64 {
 
-	allQueueName, err := w.getAllRepairQueueNames()
+	allQueueName, err := w.getAllQueueNames()
 	if err != nil {
 		w.logf(ERROR, "WALTimeRollQueue getAllExpiredQueueTimeStamps strconv.Atoi %s", err)
 		return nil
@@ -303,6 +302,17 @@ func (w *WALTimeRollQueue) delteQueue(name string) error {
 
 func (w *WALTimeRollQueue) GetNowActiveQueueName() string {
 	return w.Name + "_" + strconv.FormatInt(time.Now().UnixNano()/int64(w.rollTimeSpan)*int64(w.rollTimeSpan), 10)
+}
+
+func (w *WALTimeRollQueue) GetNowActiveRepairQueueName() string {
+	w.RLock()
+	defer w.RUnlock()
+	activeRepairQueue := w.activeRepairQueue
+	if activeRepairQueue == nil {
+		return ""
+	} else {
+		return activeRepairQueue.GetName()
+	}
 }
 
 func (w *WALTimeRollQueue) GetNextRollTime() int64 {
@@ -401,9 +411,6 @@ func (w *WALTimeRollQueue) Start() error {
 	if err != nil {
 		return err
 	}
-
-	// 删除过期的队列
-	w.deleteExpired()
 
 	if w.rpf != nil {
 		go w.repair()
@@ -510,11 +517,26 @@ func (w *WALTimeRollQueue) ResetRepairs() {
 	}
 }
 
-func (w *WALTimeRollQueue) DeleteRepairs() {
+func (w *WALTimeRollQueue) DeleteFinishedRepairs() {
+	activeRepairQueueName := w.activeRepairQueue.GetName()
 	for _, name := range w.repairQueueNames {
-		err := w.delteQueue(name)
-		if err != nil {
-			w.logf(ERROR, "WALTimeRollQueue DeleteRepairs delteQueue %s", err)
+		if name < activeRepairQueueName {
+			err := w.delteQueue(name)
+			if err != nil {
+				w.logf(ERROR, "WALTimeRollQueue DeleteRepairs delteQueue %s", err)
+			}
+		}
+	}
+}
+
+func (w *WALTimeRollQueue) DeleteRepairs() {
+	activeRepairName := w.GetNowActiveRepairQueueName()
+	for _, name := range w.repairQueueNames {
+		if activeRepairName == "" || name < activeRepairName {
+			err := w.delteQueue(name)
+			if err != nil {
+				w.logf(ERROR, "WALTimeRollQueue DeleteRepairs delteQueue %s", err)
+			}
 		}
 	}
 }
@@ -562,7 +584,11 @@ func (w *WALTimeRollQueue) init() error {
 	w.nextRollTime = w.GetNextRollTime()
 	w.forezenQueues = []string{}
 	var err error
-	w.repairQueueNames, err = w.getAllRepairQueueNames()
+
+	// 删除过期的队列
+	w.deleteExpired()
+	
+	w.repairQueueNames, err = w.getAllQueueNames()
 	//刷新所有repair队列的元信息中的readPos， readNum
 	w.ResetRepairs()
 	if len(w.repairQueueNames) > 0 {
