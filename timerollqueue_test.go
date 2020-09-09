@@ -110,34 +110,33 @@ func TestRepairQueue(t *testing.T) {
 		t.Fatal("repair names len err")
 	}
 
-	if !(len(repairNames) ==sleepSecond/ int(options.RollTimeSpanSecond) +1 || len(repairNames) == sleepSecond/int(options.RollTimeSpanSecond) +2) {
+	if !(len(repairNames) == sleepSecond/int(options.RollTimeSpanSecond)+1 || len(repairNames) == sleepSecond/int(options.RollTimeSpanSecond)+2) {
 		t.Fatal("repairNames err")
 	}
 
 	walRecover.init()
 
-
-	nextQueue := walRecover.getNextRepairQueueName(walRecover.repairQueueNames[0])
-	if len(walRecover.repairQueueNames) > 1 &&walRecover.repairQueueNames[1] != nextQueue {
-		// fmt.Println(walRecover.repairQueueNames)
+	nextQueue := walRecover.getNextRepairQueueName(walRecover.GetRepairQueueNames()[0])
+	if len(walRecover.GetRepairQueueNames()) > 1 && walRecover.GetRepairQueueNames()[1] != nextQueue {
+		// fmt.Println(walRecover.GetRepairQueueNames())
 		// fmt.Println(nextQueue)
 		t.Fatal("getNextRepairQueueName is err")
 	}
 
-	if len(walRecover.repairQueueNames) > 3 {
-		nextQueue := walRecover.getNextRepairQueueName(walRecover.repairQueueNames[1])
-		if nextQueue != walRecover.repairQueueNames[2] {
+	if len(walRecover.GetRepairQueueNames()) > 3 {
+		nextQueue := walRecover.getNextRepairQueueName(walRecover.GetRepairQueueNames()[1])
+		if nextQueue != walRecover.GetRepairQueueNames()[2] {
 			t.Fatal(" get next 2 err")
 		}
 	}
 
-	if len(walRecover.repairQueueNames) == 1 && nextQueue != "" {
+	if len(walRecover.GetRepairQueueNames()) == 1 && nextQueue != "" {
 		// fmt.Println(repairNames)
 		// fmt.Println(nextQueue)
 		t.Fatal("getNextRepairQueueName is err")
 	}
 
-	for _, repairQueue := range walRecover.repairQueueNames {
+	for _, repairQueue := range walRecover.GetRepairQueueNames() {
 
 		rq := New(repairQueue, walRecover.dataPath, walRecover.maxBytesPerFile, walRecover.minMsgSize, walRecover.maxMsgSize, walRecover.syncEvery, walRecover.syncTimeout, walRecover.logf)
 		rqDiskQueue, ok := rq.(*diskQueue)
@@ -154,7 +153,7 @@ func TestRepairQueue(t *testing.T) {
 
 	walRecover.ResetRepairs()
 
-	for _, repairQueue := range walRecover.repairQueueNames {
+	for _, repairQueue := range walRecover.GetRepairQueueNames() {
 
 		rq := New(repairQueue, walRecover.dataPath, walRecover.maxBytesPerFile, walRecover.minMsgSize, walRecover.maxMsgSize, walRecover.syncEvery, walRecover.syncTimeout, walRecover.logf)
 		rqDiskQueue, ok := rq.(*diskQueue)
@@ -170,7 +169,7 @@ func TestRepairQueue(t *testing.T) {
 
 	walRecover.ResetRepairs()
 
-	for _, repairQueue := range walRecover.repairQueueNames {
+	for _, repairQueue := range walRecover.GetRepairQueueNames() {
 
 		rq := New(repairQueue, walRecover.dataPath, walRecover.maxBytesPerFile, walRecover.minMsgSize, walRecover.maxMsgSize, walRecover.syncEvery, walRecover.syncTimeout, walRecover.logf)
 		rqDiskQueue, ok := rq.(*diskQueue)
@@ -762,7 +761,7 @@ func TestDelFinishRepair(t *testing.T) {
 	wal2.activeRepairQueue.Close()
 
 	wal2.activeRepairQueue = New(names[len(names)-1], options.DataPath, options.MaxBytesPerFile, options.MinMsgSize, options.MaxMsgSize, options.SyncEvery, options.SyncTimeout, wal2.logf)
-	wal2.DeleteFinishedRepairs()
+	wal2.DeleteRepairs()
 
 	names, err = wal2.getAllQueueNames()
 	if err != nil {
@@ -771,5 +770,14 @@ func TestDelFinishRepair(t *testing.T) {
 
 	if len(names) != 1 {
 		t.Fatal("len names err")
-	} 
+	}
+}
+
+func TestCopy(t *testing.T) {
+	a := []int{0, 1, 2}
+	b := make([]int, 3, len(a))
+	copy(a, b)
+	if b[2] != a[2] {
+		t.Fatal("err")
+	}
 }
