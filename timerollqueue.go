@@ -95,6 +95,7 @@ type WALTimeRollQueueStats struct {
 	ForezenQueuesNum       int    `json:"ForezenQueuesNum"`
 	RepairQueueNamesNum    int    `json:"RepairQueueNamesNum"`
 	LeftOverRepairQueueNum int    `json:"LeftOverRepairQueueNum"`
+	LeftOverDelQueueNum    int    `json:"LeftOverDelQueueNum"`
 	RepairCount            int64  `json:"RepairCount"`
 	RepairFinished         bool   `json:"RepairFinished"`
 }
@@ -108,6 +109,7 @@ type WALTimeRollQueue struct {
 	forezenQueues []string
 	// 当前恢复的队列
 	activeRepairQueue       Interface
+	leftOverDelQueueNames   []string
 	leftOverRpairQueueNames []string
 	repairQueueNames        []string
 	// instantiation time metadata
@@ -159,13 +161,16 @@ func (s StringSlice) Swap(i, j int) { s[i], s[j] = s[j], s[i] }
 
 func (w *WALTimeRollQueue) Stats() *WALTimeRollQueueStats {
 
+	leftOverRepairQueueNames, _ := w.GetLeftOverRepairQueueNames()
+
 	stats := &WALTimeRollQueueStats{
 		Name:                   w.Name,
 		RepairCount:            atomic.LoadInt64(&w.repairCount),
 		RepairFinished:         w.finishFlag,
 		ForezenQueuesNum:       len(w.getForezenQueuesTimeStamps()),
 		RepairQueueNamesNum:    len(w.GetRepairQueueNames()),
-		LeftOverRepairQueueNum: len(w.GetLeftOverRepairQueueNames()),
+		LeftOverRepairQueueNum: len(leftOverRepairQueueNames),
+		LeftOverDelQueueNum:    len(w.GetLeftOverDelQueueNames()),
 	}
 
 	return stats
@@ -175,8 +180,35 @@ func (w *WALTimeRollQueue) GetRepairQueueNames() []string {
 	return w.repairQueueNames
 }
 
-func (w *WALTimeRollQueue) GetLeftOverRepairQueueNames() []string {
-	return w.leftOverRpairQueueNames
+func (w *WALTimeRollQueue) GetLeftOverDelQueueNames() []string {
+	return w.leftOverDelQueueNames
+}
+
+func (w *WALTimeRollQueue) GetLeftOverRepairQueueNames() ([]string, error) {
+
+	if w.finishFlag {
+		return nil, nil
+	}
+
+	allRepairQueues := w.repairQueueNames
+
+	activeRepairQueue := w.activeRepairQueue
+	activeRepairQueueName := ""
+
+	if activeRepairQueue == nil {
+		return nil, nil
+	} else {
+		activeRepairQueueName = activeRepairQueue.GetName()
+	}
+
+	leftOverRepairQueue := []string{}
+	for _, queue := range allRepairQueues {
+		if queue >= activeRepairQueueName {
+			leftOverRepairQueue = append(leftOverRepairQueue, queue)
+		}
+	}
+
+	return leftOverRepairQueue, nil
 }
 
 func (w *WALTimeRollQueue) getAllQueueNames() ([]string, error) {
@@ -226,7 +258,7 @@ func (w *WALTimeRollQueue) getAllExpiredQueueTimeStamps() []int64 {
 }
 
 func (w *WALTimeRollQueue) getNextRepairQueueName(name string) string {
-	for _, repairName := range w.GetLeftOverRepairQueueNames() {
+	for _, repairName := range w.repairQueueNames {
 		if name < repairName {
 			return repairName
 		}
@@ -496,7 +528,7 @@ func (w *WALTimeRollQueue) ResetRepairs() {
 
 func (w *WALTimeRollQueue) DeleteRepairs() {
 	activeRepairName := w.GetNowActiveRepairQueueName()
-	leftOverNames := w.GetLeftOverRepairQueueNames()
+	leftOverNames := w.GetLeftOverDelQueueNames()
 	if len(leftOverNames) == 0 {
 		return
 	}
@@ -512,7 +544,7 @@ func (w *WALTimeRollQueue) DeleteRepairs() {
 		}
 	}
 	w.Lock()
-	w.leftOverRpairQueueNames = leftOver
+	w.leftOverDelQueueNames = leftOver
 	w.Unlock()
 }
 
@@ -562,8 +594,8 @@ func (w *WALTimeRollQueue) init() error {
 	// 删除过期的队列
 	w.deleteExpired()
 	w.repairQueueNames, err = w.getAllQueueNames()
-	w.leftOverRpairQueueNames = make([]string, len(w.repairQueueNames), len(w.repairQueueNames))
-	copy(w.leftOverRpairQueueNames, w.repairQueueNames)
+	w.leftOverDelQueueNames = make([]string, len(w.repairQueueNames), len(w.repairQueueNames))
+	copy(w.leftOverDelQueueNames, w.repairQueueNames)
 	//刷新所有repair队列的元信息中的readPos， readNum
 	w.ResetRepairs()
 	if len(w.repairQueueNames) > 0 {
