@@ -584,10 +584,8 @@ func (w *WALTimeRollQueue) init() error {
 	w.nextRollTime = w.GetNextRollTime()
 	w.forezenQueues = []string{}
 	var err error
-
 	// 删除过期的队列
 	w.deleteExpired()
-	
 	w.repairQueueNames, err = w.getAllQueueNames()
 	//刷新所有repair队列的元信息中的readPos， readNum
 	w.ResetRepairs()

@@ -60,7 +60,8 @@ func TestRepairQueue(t *testing.T) {
 	options.DataPath = tmpDir
 	options.Name = "TestRepairQueue"
 	options.MaxBytesPerFile = 32 * 1024
-	options.RollTimeSpanSecond = 5
+	options.RollTimeSpanSecond = 2
+	options.RotationTimeSecond = 12
 
 	wal := NewTimeRollQueue(l, options)
 
@@ -68,8 +69,8 @@ func TestRepairQueue(t *testing.T) {
 	if err != nil {
 		t.Fatal("start err", err)
 	}
-
-	ticker := time.NewTicker(16 * time.Second)
+	sleepSecond := 16
+	ticker := time.NewTicker(time.Duration(sleepSecond) * time.Second)
 	exit := false
 	for !exit {
 		select {
@@ -84,7 +85,9 @@ func TestRepairQueue(t *testing.T) {
 
 	}
 
+	start := time.Now()
 	wal.Close()
+	fmt.Println("Spend: ", time.Since(start).Seconds())
 
 	walRecover := &WALTimeRollQueue{
 		Name:            options.Name,
@@ -107,13 +110,31 @@ func TestRepairQueue(t *testing.T) {
 		t.Fatal("repair names len err")
 	}
 
+	if !(len(repairNames) ==sleepSecond/ int(options.RollTimeSpanSecond) +1 || len(repairNames) == sleepSecond/int(options.RollTimeSpanSecond) +2) {
+		t.Fatal("repairNames err")
+	}
+
 	walRecover.init()
 
-	if len(repairNames) >= 2 {
-		nextQueue := walRecover.getNextRepairQueueName(repairNames[0])
-		if repairNames[1] != nextQueue {
-			t.Fatal("getNextRepairQueueName is err")
+
+	nextQueue := walRecover.getNextRepairQueueName(walRecover.repairQueueNames[0])
+	if len(walRecover.repairQueueNames) > 1 &&walRecover.repairQueueNames[1] != nextQueue {
+		// fmt.Println(walRecover.repairQueueNames)
+		// fmt.Println(nextQueue)
+		t.Fatal("getNextRepairQueueName is err")
+	}
+
+	if len(walRecover.repairQueueNames) > 3 {
+		nextQueue := walRecover.getNextRepairQueueName(walRecover.repairQueueNames[1])
+		if nextQueue != walRecover.repairQueueNames[2] {
+			t.Fatal(" get next 2 err")
 		}
+	}
+
+	if len(walRecover.repairQueueNames) == 1 && nextQueue != "" {
+		// fmt.Println(repairNames)
+		// fmt.Println(nextQueue)
+		t.Fatal("getNextRepairQueueName is err")
 	}
 
 	for _, repairQueue := range walRecover.repairQueueNames {
