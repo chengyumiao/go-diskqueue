@@ -501,7 +501,7 @@ func (w *WALTimeRollQueue) DeleteForezenBefore(t int64) {
 	forezenTimes := w.getForezenQueuesTimeStamps()
 	restForezenQueue := []string{}
 	for _, time := range forezenTimes {
-		if time <= t {
+		if time <= t*1000000000 {
 			err := w.delteQueue(w.Name + "_" + strconv.FormatInt(time, 10))
 			if err != nil {
 				w.logf(ERROR, "WALTimeRollQueue DeleteForezenBefore delteQueue %s", err)

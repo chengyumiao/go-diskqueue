@@ -187,6 +187,65 @@ func TestRepairQueue(t *testing.T) {
 
 }
 
+func TestDeleteForezenQueues(t *testing.T) {
+	l := NewTestLogger(t)
+	options := DefaultOption()
+	dirPrefix := fmt.Sprintf("TestDeleteForezenQueues-%d", time.Now().UnixNano())
+	tmpDir, err := ioutil.TempDir("", dirPrefix)
+	if err != nil {
+		panic(err)
+	}
+	defer func() {
+		os.RemoveAll(tmpDir)
+	}()
+
+	options.DataPath = tmpDir
+	options.Name = "TestDeleteForezenQueues"
+	options.MaxBytesPerFile = 32 * 1024
+	options.RollTimeSpanSecond = 2
+
+	walI := NewTimeRollQueue(l, options)
+
+	err = walI.Start()
+	if err != nil {
+		t.Fatal("start err", err)
+	}
+
+	ticker := time.NewTicker(12 * time.Second)
+	exit := false
+	for !exit {
+		select {
+		case <-ticker.C:
+			exit = true
+		default:
+			err := walI.Put([]byte("a"))
+			if err != nil {
+				t.Fatal("Put error", err)
+			}
+		}
+	}
+	wal, _ := walI.(*WALTimeRollQueue)
+
+	ts := wal.getForezenQueuesTimeStamps()
+
+	start := time.Now()
+
+	if len(ts) < 5 {
+		t.Fatal("TestDeleteForezenQueues len err")
+	}
+
+	wal.DeleteForezenBefore(start.Unix())
+
+	names, err := wal.getAllQueueNames()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(names) > 1 {
+		t.Fatal("TestDeleteForezenQueues names len err")
+	}
+
+}
+
 func TestGetForezenQueuesTimeStamps(t *testing.T) {
 
 	l := NewTestLogger(t)
